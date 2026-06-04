@@ -47,7 +47,7 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         Text(
-            text = "MQTT 通信服务器参数",
+            text = "云端服务器参数",
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.Bold,
             color = MaterialTheme.colorScheme.primary
@@ -57,7 +57,7 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
         OutlinedTextField(
             value = brokerIp,
             onValueChange = { viewModel.updateBrokerIp(it) },
-            label = { Text("MQTT Broker IP 地址") },
+            label = { Text("服务器域名或IP地址") },
             placeholder = { Text("例如 voicevon.vicp.io") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -69,7 +69,7 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
             onValueChange = { 
                 it.toIntOrNull()?.let { port -> viewModel.updateBrokerPort(port) }
             },
-            label = { Text("MQTT 端口号 (Port)") },
+            label = { Text("端口号") },
             placeholder = { Text("1883") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -90,7 +90,7 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
         OutlinedTextField(
             value = username,
             onValueChange = { viewModel.updateUsername(it) },
-            label = { Text("MQTT 认证用户名") },
+            label = { Text("认证用户名") },
             placeholder = { Text("Username") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
@@ -100,7 +100,7 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
         OutlinedTextField(
             value = password,
             onValueChange = { viewModel.updatePassword(it) },
-            label = { Text("MQTT 密码 (Password)") },
+            label = { Text("密码") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
             visualTransformation = if (isPasswordVisible) VisualTransformation.None else PasswordVisualTransformation(),

@@ -17,16 +17,16 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
     private val sharedPrefs = application.getSharedPreferences("mqtt_config", Context.MODE_PRIVATE)
 
     // 表单状态 Flow
-    private val _brokerIp = MutableStateFlow("voicevon.vicp.io")
+    private val _brokerIp = MutableStateFlow("")
     val brokerIp: StateFlow<String> = _brokerIp
 
     private val _brokerPort = MutableStateFlow(1883)
     val brokerPort: StateFlow<Int> = _brokerPort
 
-    private val _username = MutableStateFlow("von")
+    private val _username = MutableStateFlow("")
     val username: StateFlow<String> = _username
 
-    private val _password = MutableStateFlow("von123456")
+    private val _password = MutableStateFlow("")
     val password: StateFlow<String> = _password
 
     private val _clientId = MutableStateFlow("")
@@ -50,10 +50,10 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
      * 从 SharedPreferences 中加载配置
      */
     fun loadConfig() {
-        _brokerIp.value = sharedPrefs.getString("broker_ip", "voicevon.vicp.io") ?: "voicevon.vicp.io"
+        _brokerIp.value = sharedPrefs.getString("broker_ip", "") ?: ""
         _brokerPort.value = sharedPrefs.getInt("broker_port", 1883)
-        _username.value = sharedPrefs.getString("username", "von") ?: "von"
-        _password.value = sharedPrefs.getString("password", "von123456") ?: "von123456"
+        _username.value = sharedPrefs.getString("username", "") ?: ""
+        _password.value = sharedPrefs.getString("password", "") ?: ""
         _clientId.value = sharedPrefs.getString("client_id", "") ?: ""
     }
 
@@ -74,6 +74,7 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
         val context = getApplication<Application>()
         val serviceIntent = Intent(context, MqttService::class.java)
         
+        context.stopService(serviceIntent)
         // 保证在 Android 8.0+ 使用 startForegroundService
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)

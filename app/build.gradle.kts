@@ -6,18 +6,18 @@ plugins {
 
 android {
     namespace = "com.water.von"
-    compileSdk = 34
+    compileSdk = 36
     defaultConfig {
         applicationId = "com.water.von"
         minSdk = 26
-        targetSdk = 34
+        targetSdk = 36
         versionCode = 1
         versionName = "1.0"
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }
     }
@@ -84,4 +84,7 @@ dependencies {
 
   // MQTT
   implementation("org.eclipse.paho:org.eclipse.paho.client.mqttv3:1.2.5")
+
+  // Coil for async image loading
+  implementation("io.coil-kt:coil-compose:2.6.0")
 }

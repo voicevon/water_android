@@ -18,8 +18,8 @@ import java.util.Locale
 class LogManager(private val context: Context) {
     private val TAG = "LogManager"
 
-    // 获取沙盒私有根路径：/sdcard/Android/data/com.water.von/files/
-    private val baseDir: File? = context.getExternalFilesDir(null)
+    // 获取沙盒私有根路径：/sdcard/Android/data/com.water.von/files/ 或降级
+    private val baseDir: File = context.getExternalFilesDir(null) ?: context.filesDir
     private val logsDir = File(baseDir, "logs")
     private val imagesDir = File(baseDir, "images")
 

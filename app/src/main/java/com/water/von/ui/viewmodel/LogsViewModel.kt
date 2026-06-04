@@ -8,6 +8,7 @@ import com.water.von.data.LogManager
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -55,7 +56,7 @@ class LogsViewModel(application: Application) : AndroidViewModel(application) {
      * 重新从本地文件系统加载日志，并进行关键字过滤
      */
     fun loadLogs() {
-        viewModelScope.launch {
+        viewModelScope.launch(Dispatchers.IO) {
             val date = _selectedDate.value
             val keyword = _searchKeyword.value
             val allLogs = logManager.readLogs(date)

@@ -1,7 +1,6 @@
 package com.water.von.ui.screens
 
 import android.app.DatePickerDialog
-import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -22,6 +21,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.water.von.data.LogEntry
 import com.water.von.ui.viewmodel.LogsViewModel
 import java.io.File
@@ -52,21 +53,23 @@ fun LogsScreen(viewModel: LogsViewModel = viewModel()) {
         } catch (_: Exception) {}
     }
 
-    val datePickerDialog = DatePickerDialog(
-        context,
-        { _, year, month, dayOfMonth ->
-            val cal = Calendar.getInstance().apply {
-                set(Calendar.YEAR, year)
-                set(Calendar.MONTH, month)
-                set(Calendar.DAY_OF_MONTH, dayOfMonth)
-            }
-            val formattedDate = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(cal.time)
-            viewModel.setDateAndLoad(formattedDate)
-        },
-        calendar.get(Calendar.YEAR),
-        calendar.get(Calendar.MONTH),
-        calendar.get(Calendar.DAY_OF_MONTH)
-    )
+    val datePickerDialog = remember(context, selectedDate) {
+        DatePickerDialog(
+            context,
+            { _, year, month, dayOfMonth ->
+                val cal = Calendar.getInstance().apply {
+                    set(Calendar.YEAR, year)
+                    set(Calendar.MONTH, month)
+                    set(Calendar.DAY_OF_MONTH, dayOfMonth)
+                }
+                val formattedDate = SimpleDateFormat("yyyyMMdd", Locale.getDefault()).format(cal.time)
+                viewModel.setDateAndLoad(formattedDate)
+            },
+            calendar.get(Calendar.YEAR),
+            calendar.get(Calendar.MONTH),
+            calendar.get(Calendar.DAY_OF_MONTH)
+        )
+    }
 
     Column(
         modifier = Modifier
@@ -150,18 +153,18 @@ fun LogsScreen(viewModel: LogsViewModel = viewModel()) {
                 title = { Text("现场污水抓拍 (通道 ${entry.channel})") },
                 text = {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
-                        if (bitmap != null) {
-                            Image(
-                                bitmap = bitmap.asImageBitmap(),
-                                contentDescription = "大图预览",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(300.dp)
-                                    .clip(RoundedCornerShape(8.dp)),
-                                contentScale = ContentScale.Fit
-                            )
-                        }
+                        AsyncImage(
+                            model = ImageRequest.Builder(LocalContext.current)
+                                .data(photoFile)
+                                .crossfade(true)
+                                .build(),
+                            contentDescription = "大图预览",
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(300.dp)
+                                .clip(RoundedCornerShape(8.dp)),
+                            contentScale = ContentScale.Fit
+                        )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
                             text = "时间: ${entry.time}\n动作: ${entry.message}",
@@ -231,18 +234,18 @@ fun LogItemCard(entry: LogEntry, viewModel: LogsViewModel, onImageClick: () -> U
             if (entry.imagePath.isNotEmpty()) {
                 val photoFile = viewModel.getPhotoFile(entry.imagePath)
                 if (photoFile != null && photoFile.exists()) {
-                    val bitmap = BitmapFactory.decodeFile(photoFile.absolutePath)
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "污水缩略图",
-                            modifier = Modifier
-                                .size(50.dp)
-                                .clip(RoundedCornerShape(4.dp))
-                                .clickable { onImageClick() },
-                            contentScale = ContentScale.Crop
-                        )
-                    }
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(photoFile)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "污水缩略图",
+                        modifier = Modifier
+                            .size(50.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .clickable { onImageClick() },
+                        contentScale = ContentScale.Crop
+                    )
                 }
             }
         }

@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
@@ -40,6 +41,7 @@ class MqttService : Service() {
     private lateinit var logManager: LogManager
     private var mqttClient: MqttClient? = null
     private var isServiceRunning = false
+    private val notificationCounter = java.util.concurrent.atomic.AtomicInteger(2000)
 
     @Volatile
     private var shouldReconnect = true
@@ -56,40 +58,41 @@ class MqttService : Service() {
         val latestPhotoPath = MutableStateFlow<String?>(null)
         val mqttLogs = MutableStateFlow<List<String>>(emptyList())
 
-        // 单例引用，用于从 UI 触发 MQTT 发布指令
-        @Volatile
-        private var instance: MqttService? = null
-
         /**
-         * 向指定主题发布消息
+         * 向指定主题发布消息（通过 Intent 发送给 Service 避免内存泄漏）
          */
-        fun publish(topic: String, payload: String): Boolean {
-            val service = instance
-            if (service != null && service.mqttClient?.isConnected == true) {
-                return try {
-                    val message = MqttMessage(payload.toByteArray(Charsets.UTF_8))
-                    message.qos = 1
-                    service.mqttClient?.publish(topic, message)
-                    service.addConsoleLog("发布消息成功 -> 主题: $topic, 内容: $payload")
-                    true
-                } catch (e: Exception) {
-                    service.addConsoleLog("发布消息失败: ${e.message}")
-                    false
-                }
+        fun publish(context: Context, topic: String, payload: String) {
+            val intent = Intent(context, MqttService::class.java).apply {
+                action = "com.water.von.ACTION_PUBLISH"
+                putExtra("topic", topic)
+                putExtra("payload", payload)
             }
-            return false
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        instance = this
         logManager = LogManager(applicationContext)
         createNotificationChannels()
+        serviceScope.launch { logManager.cleanOldLogs(30) }
         addConsoleLog("MqttService 已创建")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == "com.water.von.ACTION_PUBLISH") {
+            val topic = intent.getStringExtra("topic")
+            val payload = intent.getStringExtra("payload")
+            if (topic != null && payload != null) {
+                publishInternal(topic, payload)
+            }
+            return START_STICKY
+        }
+
         if (!isServiceRunning) {
             isServiceRunning = true
             startForegroundService()
@@ -99,12 +102,26 @@ class MqttService : Service() {
         return START_STICKY
     }
 
+    private fun publishInternal(topic: String, payload: String) {
+        if (mqttClient?.isConnected == true) {
+            try {
+                val message = MqttMessage(payload.toByteArray(Charsets.UTF_8))
+                message.qos = 1
+                mqttClient?.publish(topic, message)
+                addConsoleLog("发布消息成功 -> 主题: $topic, 内容: $payload")
+            } catch (e: Exception) {
+                addConsoleLog("发布消息失败: ${e.message}")
+            }
+        } else {
+            addConsoleLog("发布消息失败: MQTT 未连接")
+        }
+    }
+
     override fun onDestroy() {
         shouldReconnect = false
         disconnectMqtt()
         serviceJob.cancel()
         isServiceRunning = false
-        instance = null
         addConsoleLog("MqttService 已销毁")
         super.onDestroy()
     }
@@ -118,13 +135,10 @@ class MqttService : Service() {
      */
     private fun addConsoleLog(message: String) {
         Log.i(TAG, message)
-        val currentLogs = mqttLogs.value.toMutableList()
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-        currentLogs.add(0, "[$timestamp] $message")
-        if (currentLogs.size > 100) { // 最多保留100条调试日志
-            currentLogs.removeAt(currentLogs.size - 1)
+        mqttLogs.update { current ->
+            (listOf("[$timestamp] $message") + current).take(100)
         }
-        mqttLogs.value = currentLogs
     }
 
     /**
@@ -183,10 +197,10 @@ class MqttService : Service() {
     private fun connectMqtt() {
         serviceScope.launch {
             val sharedPreferences = getSharedPreferences("mqtt_config", Context.MODE_PRIVATE)
-            val brokerIp = sharedPreferences.getString("broker_ip", "voicevon.vicp.io") ?: "voicevon.vicp.io"
+            val brokerIp = sharedPreferences.getString("broker_ip", "") ?: ""
             val brokerPort = sharedPreferences.getInt("broker_port", 1883)
-            val username = sharedPreferences.getString("username", "von") ?: "von"
-            val password = sharedPreferences.getString("password", "von123456") ?: "von123456"
+            val username = sharedPreferences.getString("username", "") ?: ""
+            val password = sharedPreferences.getString("password", "") ?: ""
             val customClientId = sharedPreferences.getString("client_id", "") ?: ""
             
             val brokerUrl = "tcp://$brokerIp:$brokerPort"
@@ -194,6 +208,12 @@ class MqttService : Service() {
 
             addConsoleLog("尝试连接至 MQTT Broker: $brokerUrl...")
             try {
+                try {
+                    if (mqttClient?.isConnected == true) mqttClient?.disconnect()
+                    mqttClient?.close()
+                } catch (_: Exception) {}
+                mqttClient = null
+                
                 mqttClient = MqttClient(brokerUrl, clientId, MemoryPersistence())
                 val options = MqttConnectOptions().apply {
                     userName = username
@@ -289,6 +309,10 @@ class MqttService : Service() {
             }
 
             topic == "pi_water/photo" -> {
+                if (payloadBytes.size > 5 * 1024 * 1024) { // 5MB 上限
+                    addConsoleLog("图片过大，已忽略: ${payloadBytes.size} bytes")
+                    return
+                }
                 serviceScope.launch {
                     val relativePath = logManager.savePhoto(payloadBytes)
                     if (relativePath.isNotEmpty()) {
@@ -313,9 +337,9 @@ class MqttService : Service() {
                 val lines = logPayload.split("\n")
                 val actionMessage = if (lines.size >= 3) lines[2] else logPayload
                 
-                val level = if (actionMessage.contains("ERROR") || actionMessage.contains("异常") || actionMessage.contains("失踪")) {
+                val level = if (actionMessage.contains("ERROR") || actionMessage.contains("异常") || actionMessage.contains("失败")) {
                     "ERROR"
-                } else if (actionMessage.contains("警告") || actionMessage.contains("丟")) {
+                } else if (actionMessage.contains("警告") || actionMessage.contains("丢")) {
                     "WARN"
                 } else {
                     "INFO"
@@ -369,7 +393,7 @@ class MqttService : Service() {
             .build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-        manager.notify(System.currentTimeMillis().toInt(), alarmNotification)
+        manager.notify(notificationCounter.getAndIncrement(), alarmNotification)
     }
 
     private fun disconnectMqtt() {

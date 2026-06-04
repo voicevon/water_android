@@ -20,6 +20,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTransformGestures
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import com.water.von.data.LogEntry
 import com.water.von.ui.viewmodel.MonitorViewModel
 import java.io.File
@@ -37,9 +45,30 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
     val log2 by viewModel.latestLogChannel2.collectAsState()
     val log3 by viewModel.latestLogChannel3.collectAsState()
     val photoPath by viewModel.latestPhotoPath.collectAsState()
+    val brokerUrl by viewModel.brokerUrlFlow.collectAsState()
 
     val context = LocalContext.current
+    var displayFile by remember { mutableStateOf<File?>(null) }
+    
+    LaunchedEffect(Unit) {
+        viewModel.refreshBrokerUrl()
+    }
+
+    LaunchedEffect(photoPath) {
+        val baseDir = context.getExternalFilesDir(null) ?: context.filesDir
+        val imagesDir = File(baseDir, "images")
+        if (photoPath != null) {
+            val imgFile = File(imagesDir, photoPath!!.substringAfter("images/"))
+            if (imgFile.exists()) displayFile = imgFile
+        } else {
+            val latestFile = imagesDir.listFiles { _, name -> name.startsWith("IMG_") && name.endsWith(".jpg") }
+                ?.maxByOrNull { it.lastModified() }
+            displayFile = latestFile
+        }
+    }
+
     val scrollState = rememberScrollState()
+    var showImagePreview by remember { mutableStateOf(false) }
 
     Column(
         modifier = Modifier
@@ -48,45 +77,23 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
             .verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
-        // 1. MQTT 连接状态栏卡片
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+        if (!isConnected) {
+            Card(
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
                     Text(
-                        text = "远程服务连接",
+                        text = "云端未连接",
+                        color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold
-                    )
-                    Text(
-                        text = "Broker: voicevon.vicp.io:1883",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 连接指示灯灯泡
-                    val lightColor = if (isConnected) Color(0xFF4CAF50) else Color(0xFF9E9E9E)
-                    Box(
-                        modifier = Modifier
-                            .size(12.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(lightColor)
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text(
-                        text = if (isConnected) "已连接" else "未连接",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.Medium
                     )
                 }
             }
@@ -102,12 +109,37 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                     .fillMaxWidth()
                     .padding(16.dp)
             ) {
-                Text(
-                    text = "树莓派设备诊断信息",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.primary
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = "控制器",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+
+                    val isOffline = systemStatus.equals("offline", ignoreCase = true)
+                    val statusText = if (isOffline) "不在线" else "在线"
+                    val statusColor = if (isOffline) Color.Red else Color.Green
+
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(
+                            modifier = Modifier
+                                .size(8.dp)
+                                .clip(RoundedCornerShape(50))
+                                .background(statusColor)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(
+                            text = statusText,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = statusColor
+                        )
+                    }
+                }
                 Spacer(modifier = Modifier.height(12.dp))
 
                 // 解析 \n 三行数据
@@ -133,17 +165,6 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 Column {
                     Text(text = "系统累计运行时间", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
                     Text(text = uptime, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                }
-
-                Spacer(modifier = Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(text = "系统当前工作模式: ", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(
-                        text = systemStatus.uppercase(),
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.secondary,
-                        fontWeight = FontWeight.Bold
-                    )
                 }
             }
         }
@@ -176,35 +197,80 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center
             ) {
-                val file = photoPath?.let {
-                    val baseDir = context.getExternalFilesDir(null)
-                    val imgFile = File(baseDir, it.substringAfter("images/"))
-                    if (imgFile.exists()) imgFile else null
-                }
-
-                if (file != null) {
-                    val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-                    if (bitmap != null) {
-                        Image(
-                            bitmap = bitmap.asImageBitmap(),
-                            contentDescription = "污水监测图像快照",
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .weight(1f)
-                                .clip(RoundedCornerShape(8.dp)),
-                            contentScale = ContentScale.Crop
-                        )
-                        Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = "污水监测图像快照 (回传时间: ${file.name.substringAfter("IMG_").substringBefore(".jpg")})",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Color.Gray
-                        )
-                    } else {
-                        PhotoPlaceholder()
-                    }
+                if (displayFile != null) {
+                    AsyncImage(
+                        model = ImageRequest.Builder(LocalContext.current)
+                            .data(displayFile)
+                            .crossfade(true)
+                            .build(),
+                        contentDescription = "污水监测图像快照",
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .weight(1f)
+                            .clip(RoundedCornerShape(8.dp))
+                            .clickable { showImagePreview = true },
+                        contentScale = ContentScale.Crop
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "污水监测图像快照 (回传时间: ${displayFile!!.name.substringAfter("IMG_").substringBefore(".jpg")})",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Color.Gray
+                    )
                 } else {
                     PhotoPlaceholder()
+                }
+            }
+        }
+    }
+
+    if (showImagePreview && viewModel.latestPhotoPath.value != null) {
+        val file = displayFile
+        if (file != null) {
+            Dialog(
+                onDismissRequest = { showImagePreview = false },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
+                    var scale by remember { mutableStateOf(1f) }
+                    var offsetX by remember { mutableStateOf(0f) }
+                    var offsetY by remember { mutableStateOf(0f) }
+
+                    AsyncImage(
+                        model = file,
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .pointerInput(Unit) {
+                                detectTransformGestures { _, pan, zoom, _ ->
+                                    scale = (scale * zoom).coerceIn(1f, 5f)
+                                    if (scale > 1f) {
+                                        val maxOffset = (scale - 1) * 1000f
+                                        offsetX = (offsetX + pan.x).coerceIn(-maxOffset, maxOffset)
+                                        offsetY = (offsetY + pan.y).coerceIn(-maxOffset, maxOffset)
+                                    } else {
+                                        offsetX = 0f
+                                        offsetY = 0f
+                                    }
+                                }
+                            }
+                            .graphicsLayer(
+                                scaleX = scale,
+                                scaleY = scale,
+                                translationX = offsetX,
+                                translationY = offsetY
+                            ),
+                        contentScale = ContentScale.Fit
+                    )
+
+                    IconButton(
+                        onClick = { showImagePreview = false },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp)
+                    ) {
+                        Text("✖", color = Color.White, fontSize = 24.sp)
+                    }
                 }
             }
         }
