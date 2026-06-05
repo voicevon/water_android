@@ -88,13 +88,8 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
         // 1. 上部分：三个药液管道水流监视卡片（置顶第一栏，无网关连接条）
-        Text(
-            text = "药液管道水流监视",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             PipeCard(
@@ -102,21 +97,21 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 hasWater = pipe1HasWater,
                 latestMsg = log1?.message ?: "暂无消息",
                 onClick = { viewModel.setPipeHasWater(1, !pipe1HasWater) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).fillMaxHeight()
             )
             PipeCard(
                 name = "碳源",
                 hasWater = pipe2HasWater,
                 latestMsg = log2?.message ?: "暂无消息",
                 onClick = { viewModel.setPipeHasWater(2, !pipe2HasWater) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).fillMaxHeight()
             )
             PipeCard(
                 name = "铁盐",
                 hasWater = pipe3HasWater,
                 latestMsg = log3?.message ?: "暂无消息",
                 onClick = { viewModel.setPipeHasWater(3, !pipe3HasWater) },
-                modifier = Modifier.weight(1f)
+                modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
 
@@ -126,12 +121,9 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
             onStepClick = { index -> viewModel.setCurrentStatusIndex(index) }
         )
 
+        Spacer(modifier = Modifier.height(24.dp))
+
         // 3. 下部分：污水图像快照监视区
-        Text(
-            text = "污水监测图像快照",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
         Card(
             modifier = Modifier
                 .fillMaxWidth()
@@ -321,6 +313,7 @@ fun PipeCard(
         Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .fillMaxHeight()
                 .padding(vertical = 12.dp, horizontal = 8.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
@@ -342,17 +335,10 @@ fun PipeCard(
             Text(
                 text = name,
                 style = MaterialTheme.typography.bodyMedium,
+                fontSize = 11.sp,
                 fontWeight = FontWeight.Bold,
-                color = if (hasWater) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                text = latestMsg,
-                fontSize = 10.sp,
-                color = Color.Gray,
-                maxLines = 1,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth()
+                color = if (hasWater) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
             )
         }
     }
@@ -366,11 +352,11 @@ fun StepProgressBar(
     currentIndex: Int,
     onStepClick: (Int) -> Unit
 ) {
-    val steps = listOf("等待", "准备取样", "取头样", "等待", "取中样", "等待", "取尾样", "等待", "排空", "结束")
+    val steps = listOf("空闲", "待温", "取头样", "等待", "取中样", "等待", "取尾样", "等待", "排空", "结束")
     
     // Y 偏移量高度档次对应这 10 个状态 (Y值越小表示高度越高)
     // 0:等待(110dp), 1:准备(60dp), 2:头样(10dp), 3:等待(60dp), 4:中样(10dp), 5:等待(60dp), 6:尾样(10dp), 7:等待(60dp), 8:排空(10dp), 9:结束(110dp)
-    val yOffsets = listOf(110.dp, 60.dp, 10.dp, 60.dp, 10.dp, 60.dp, 10.dp, 60.dp, 10.dp, 110.dp)
+    val yOffsets = listOf(150.dp, 100.dp, 50.dp, 100.dp, 50.dp, 100.dp, 50.dp, 100.dp, 50.dp, 150.dp)
 
     val density = LocalDensity.current
     val activeColor = MaterialTheme.colorScheme.primary
@@ -384,18 +370,10 @@ fun StepProgressBar(
         Column(
             modifier = Modifier.padding(16.dp)
         ) {
-            Text(
-                text = "采样流程高度错位示意折线图 (高度差防字重叠)",
-                style = MaterialTheme.typography.titleSmall,
-                fontWeight = FontWeight.Bold,
-                color = MaterialTheme.colorScheme.primary
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(160.dp)
+                    .height(220.dp)
             ) {
                 val widthPx = constraints.maxWidth
                 val widthDp = with(density) { widthPx.toDp() }
@@ -492,10 +470,14 @@ fun StepProgressBar(
                         )
                     }
 
-                    // 将文字精确错落定位在节点正下方 (加上 32.dp 垂直偏移)
+                    // 将文字精确错落定位在节点正下方 (部分阶段放在上方，部分阶段放在下方)
                     val textWidth = 50.dp // 设定一个合理字宽用于居中
                     val textXPos = stepWidth * index + stepWidth / 2 - textWidth / 2
-                    val textYPos = yPos + 32.dp
+                    val textYPos = if (index % 2 == 0 && index != 0 && index != 9) {
+                        yPos - 35.dp
+                    } else {
+                        yPos + 32.dp
+                    }
 
                     Text(
                         text = stepName,
