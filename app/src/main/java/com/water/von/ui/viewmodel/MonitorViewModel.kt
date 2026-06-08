@@ -36,6 +36,10 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val latestLogChannel3 = MqttService.latestLogChannel3
     val latestPhotoPath = MqttService.latestPhotoPath
 
+    // 远程拍照 Loading 防抖状态
+    val isTakingPhoto = MutableStateFlow(false)
+    private var timeoutJob: kotlinx.coroutines.Job? = null
+
     // 管道有水状态
     val pipe1HasWater = MutableStateFlow(false)
     val pipe2HasWater = MutableStateFlow(false)
@@ -45,6 +49,14 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     val currentStatusIndex = MutableStateFlow(-1)
 
     init {
+        viewModelScope.launch {
+            MqttService.latestPhotoPath.collect { path ->
+                if (path != null) {
+                    isTakingPhoto.value = false
+                    timeoutJob?.cancel()
+                }
+            }
+        }
         viewModelScope.launch {
             MqttService.latestLogChannel1.collect { entry ->
                 entry?.message?.let { msg ->
@@ -133,6 +145,26 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     fun setCurrentStatusIndex(index: Int) {
         if (index in -1..9) {
             currentStatusIndex.value = index
+        }
+    }
+
+    /**
+     * 手动触发远程拍照功能
+     */
+    fun takePhoto(context: Context) {
+        if (isTakingPhoto.value) return
+        isTakingPhoto.value = true
+
+        // 发送控制指令至 MQTT 主题
+        MqttService.publish(context, "pi_water/control/take_photo", "take")
+
+        // 启动 15 秒超时强制解锁，防止因丢包或树莓派离线导致按钮永久卡死
+        timeoutJob?.cancel()
+        timeoutJob = viewModelScope.launch {
+            kotlinx.coroutines.delay(15000L)
+            if (isTakingPhoto.value) {
+                isTakingPhoto.value = false
+            }
         }
     }
 }

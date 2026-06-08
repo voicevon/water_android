@@ -51,6 +51,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
     val log2 by viewModel.latestLogChannel2.collectAsState()
     val log3 by viewModel.latestLogChannel3.collectAsState()
     val photoPath by viewModel.latestPhotoPath.collectAsState()
+    val isTakingPhoto by viewModel.isTakingPhoto.collectAsState()
 
     val pipe1HasWater by viewModel.pipe1HasWater.collectAsState()
     val pipe2HasWater by viewModel.pipe2HasWater.collectAsState()
@@ -127,7 +128,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .height(260.dp),
+                .height(270.dp),
             elevation = CardDefaults.cardElevation(2.dp)
         ) {
             Column(
@@ -152,13 +153,46 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                         contentScale = ContentScale.Crop
                     )
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "物理照片回传 (回传时间: ${displayFile!!.name.substringAfter("IMG_").substringBefore(".jpg")})",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color.Gray
-                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "物理照片回传 (回传时间: ${displayFile!!.name.substringAfter("IMG_").substringBefore(".jpg")})",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Color.Gray,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { viewModel.takePhoto(context) },
+                            enabled = !isTakingPhoto,
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
+                            modifier = Modifier.height(30.dp),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = MaterialTheme.colorScheme.primary,
+                                disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+                            )
+                        ) {
+                            if (isTakingPhoto) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(12.dp),
+                                    color = Color.White,
+                                    strokeWidth = 1.5.dp
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text("拍摄中", fontSize = 10.sp, color = Color.White)
+                            } else {
+                                Text("📷 远程拍照", fontSize = 10.sp, color = Color.White)
+                            }
+                        }
+                    }
                 } else {
-                    PhotoPlaceholder()
+                    PhotoPlaceholder(
+                        onTakePhoto = { viewModel.takePhoto(context) },
+                        isTakingPhoto = isTakingPhoto
+                    )
                 }
             }
         }
@@ -497,7 +531,7 @@ fun StepProgressBar(
 }
 
 @Composable
-fun PhotoPlaceholder() {
+fun PhotoPlaceholder(onTakePhoto: () -> Unit, isTakingPhoto: Boolean) {
     Column(
         modifier = Modifier.fillMaxSize(),
         verticalArrangement = Arrangement.Center,
@@ -514,6 +548,29 @@ fun PhotoPlaceholder() {
             style = MaterialTheme.typography.labelSmall,
             color = Color.LightGray
         )
+        Spacer(modifier = Modifier.height(16.dp))
+        Button(
+            onClick = onTakePhoto,
+            enabled = !isTakingPhoto,
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 6.dp),
+            modifier = Modifier.height(36.dp),
+            colors = ButtonDefaults.buttonColors(
+                containerColor = MaterialTheme.colorScheme.primary,
+                disabledContainerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.5f)
+            )
+        ) {
+            if (isTakingPhoto) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(14.dp),
+                    color = Color.White,
+                    strokeWidth = 2.dp
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("正在拍摄...", fontSize = 11.sp, color = Color.White)
+            } else {
+                Text("📷 远程拍照", fontSize = 11.sp, color = Color.White)
+            }
+        }
     }
 }
 
