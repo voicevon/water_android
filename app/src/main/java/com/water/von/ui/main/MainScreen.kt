@@ -16,6 +16,7 @@ import com.water.von.ui.screens.ConfigScreen
 import com.water.von.ui.screens.LogsScreen
 import com.water.von.ui.screens.MonitorScreen
 import com.water.von.ui.screens.SettingsScreen
+import com.water.von.ui.screens.SensorDebugScreen
 
 /**
  * 主容器页面 MainScreen
@@ -29,6 +30,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var selectedTab by remember { mutableStateOf(0) }
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
+    var showSensorDebugWindow by remember { mutableStateOf(false) }
 
     if (showAboutDialog) {
         AlertDialog(
@@ -49,6 +51,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     Text("确定")
                 }
             }
+        )
+    }
+
+    if (showSensorDebugWindow) {
+        SensorDebugScreen(
+            onDismissRequest = { showSensorDebugWindow = false }
         )
     }
 
@@ -79,6 +87,13 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             onClick = {
                                 showMenu = false
                                 selectedTab = 3
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("传感器调试") },
+                            onClick = {
+                                showMenu = false
+                                showSensorDebugWindow = true
                             }
                         )
                         DropdownMenuItem(

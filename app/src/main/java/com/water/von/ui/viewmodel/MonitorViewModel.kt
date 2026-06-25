@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.water.von.service.MqttService
+import com.water.von.utils.MqttTopics
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -156,7 +157,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         isTakingPhoto.value = true
 
         // 发送控制指令至 MQTT 主题
-        MqttService.publish(context, "pi_water/control/take_photo", "take")
+        MqttService.publish(context, MqttTopics.CONTROL_TAKE_PHOTO, "take")
 
         // 启动 15 秒超时强制解锁，防止因丢包或树莓派离线导致按钮永久卡死
         timeoutJob?.cancel()

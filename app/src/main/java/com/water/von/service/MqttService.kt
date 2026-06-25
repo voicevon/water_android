@@ -14,6 +14,7 @@ import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.water.von.MainActivity
 import com.water.von.data.LogEntry
+import com.water.von.utils.MqttTopics
 import com.water.von.data.LogManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -57,6 +58,7 @@ class MqttService : Service() {
         val latestLogChannel3 = MutableStateFlow<LogEntry?>(null)
         val latestPhotoPath = MutableStateFlow<String?>(null)
         val mqttLogs = MutableStateFlow<List<String>>(emptyList())
+        val latestSensorRawData = MutableStateFlow<IntArray?>(null)
 
         /**
          * 向指定主题发布消息（通过 Intent 发送给 Service 避免内存泄漏）
@@ -107,13 +109,18 @@ class MqttService : Service() {
             try {
                 val message = MqttMessage(payload.toByteArray(Charsets.UTF_8))
                 message.qos = 1
+                message.isRetained = false
                 mqttClient?.publish(topic, message)
-                addConsoleLog("发布消息成功 -> 主题: $topic, 内容: $payload")
+                // publish() 是异步的，消息已加入 Paho 内部队列，等待 deliveryComplete 回调确认 Broker 已收到
+                addConsoleLog("消息已加入发送队列 -> 主题: $topic, 内容: $payload")
+            } catch (e: MqttException) {
+                // MqttException 包含 Paho 错误码，比如 reasonCode=32104 表示连接丢失
+                addConsoleLog("发布消息失败 [MqttException rc=${e.reasonCode}]: ${e.message}")
             } catch (e: Exception) {
-                addConsoleLog("发布消息失败: ${e.message}")
+                addConsoleLog("发布消息失败 [${e.javaClass.simpleName}]: ${e.message}")
             }
         } else {
-            addConsoleLog("发布消息失败: MQTT 未连接")
+            addConsoleLog("发布消息失败: MQTT 未连接 (isConnected=false)")
         }
     }
 
@@ -246,6 +253,14 @@ class MqttService : Service() {
                     }
 
                     override fun deliveryComplete(token: IMqttDeliveryToken?) {
+                        // Broker 已确认收到 QoS=1 消息（PUBACK 已到达）
+                        try {
+                            val msg = token?.message
+                            val payload = msg?.let { String(it.payload, Charsets.UTF_8) } ?: "<unknown>"
+                            addConsoleLog("Broker 已确认收到消息 ✓ payload=$payload")
+                        } catch (_: Exception) {
+                            addConsoleLog("Broker 已确认收到消息 ✓")
+                        }
                     }
                 })
 
@@ -266,10 +281,11 @@ class MqttService : Service() {
      */
     private fun subscribeToTopics() {
         try {
-            mqttClient?.subscribe("pi_water/system/status", 1)
-            mqttClient?.subscribe("pi_water/system/info", 1)
-            mqttClient?.subscribe("pi_water/photo", 1)
-            mqttClient?.subscribe("pi_water/log/+", 1) // 通配符订阅 1, 2, 3 通道日志
+            mqttClient?.subscribe(MqttTopics.SYSTEM_STATUS, 1)
+            mqttClient?.subscribe(MqttTopics.SYSTEM_INFO, 1)
+            mqttClient?.subscribe(MqttTopics.PHOTO, 1)
+            mqttClient?.subscribe(MqttTopics.LOG_WILDCARD, 1) // 通配符订阅 1, 2, 3 通道日志
+            mqttClient?.subscribe(MqttTopics.SENSOR_DATA, 1) // 订阅水传感器原始数据
             addConsoleLog("已成功订阅监控主题队列")
         } catch (e: Exception) {
             addConsoleLog("订阅主题失败: ${e.message}")
@@ -298,17 +314,31 @@ class MqttService : Service() {
         val payloadBytes = message.payload
         
         when {
-            topic == "pi_water/system/status" -> {
+            topic == MqttTopics.SENSOR_DATA -> {
+                try {
+                    val jsonStr = String(payloadBytes, Charsets.UTF_8)
+                    val json = org.json.JSONObject(jsonStr)
+                    val ch1 = json.optInt("ch1", 0)
+                    val ch2 = json.optInt("ch2", 0)
+                    val ch3 = json.optInt("ch3", 0)
+                    val ch4 = json.optInt("ch4", 0)
+                    latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to parse sensor data: ${e.message}", e)
+                }
+            }
+
+            topic == MqttTopics.SYSTEM_STATUS -> {
                 val status = String(payloadBytes, Charsets.UTF_8)
                 systemStatus.value = status
             }
             
-            topic == "pi_water/system/info" -> {
+            topic == MqttTopics.SYSTEM_INFO -> {
                 val info = String(payloadBytes, Charsets.UTF_8)
                 systemInfo.value = info
             }
 
-            topic == "pi_water/photo" -> {
+            topic == MqttTopics.PHOTO -> {
                 if (payloadBytes.size > 5 * 1024 * 1024) { // 5MB 上限
                     addConsoleLog("图片过大，已忽略: ${payloadBytes.size} bytes")
                     return
@@ -328,8 +358,8 @@ class MqttService : Service() {
                 }
             }
 
-            topic.startsWith("pi_water/log/") -> {
-                val channelStr = topic.substringAfter("pi_water/log/")
+            topic.startsWith(MqttTopics.LOG_PREFIX) -> {
+                val channelStr = topic.substringAfter(MqttTopics.LOG_PREFIX)
                 val channelId = channelStr.toIntOrNull() ?: 1
                 val logPayload = String(payloadBytes, Charsets.UTF_8)
                 

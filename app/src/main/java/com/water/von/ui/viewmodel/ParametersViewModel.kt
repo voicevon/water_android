@@ -5,6 +5,7 @@ import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.water.von.service.MqttService
+import com.water.von.utils.MqttTopics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -107,8 +108,8 @@ class ParametersViewModel(application: Application) : AndroidViewModel(applicati
         }
 
         // 2. 通过 MQTT 远端同步下发 ( expected_duration 和 pump_work_time )
-        val durationTopic = "pi_water/config/duration/$channelId"
-        val pumpTimeTopic = "pi_water/config/pump_time/$channelId"
+        val durationTopic = MqttTopics.getDurationTopic(channelId)
+        val pumpTimeTopic = MqttTopics.getPumpTimeTopic(channelId)
 
         val context = getApplication<Application>()
         // 按照树莓派格式，下发时间字符串（分钟/秒）
@@ -125,16 +126,16 @@ class ParametersViewModel(application: Application) : AndroidViewModel(applicati
         val context = getApplication<Application>()
         
         // Channel 1
-        MqttService.publish(context, "pi_water/config/duration/1", _duration1.value.toString())
-        MqttService.publish(context, "pi_water/config/pump_time/1", _pumpTime1.value.toString())
+        MqttService.publish(context, MqttTopics.getDurationTopic(1), _duration1.value.toString())
+        MqttService.publish(context, MqttTopics.getPumpTimeTopic(1), _pumpTime1.value.toString())
         
         // Channel 2
-        MqttService.publish(context, "pi_water/config/duration/2", _duration2.value.toString())
-        MqttService.publish(context, "pi_water/config/pump_time/2", _pumpTime2.value.toString())
+        MqttService.publish(context, MqttTopics.getDurationTopic(2), _duration2.value.toString())
+        MqttService.publish(context, MqttTopics.getPumpTimeTopic(2), _pumpTime2.value.toString())
         
         // Channel 3
-        MqttService.publish(context, "pi_water/config/duration/3", _duration3.value.toString())
-        MqttService.publish(context, "pi_water/config/pump_time/3", _pumpTime3.value.toString())
+        MqttService.publish(context, MqttTopics.getDurationTopic(3), _duration3.value.toString())
+        MqttService.publish(context, MqttTopics.getPumpTimeTopic(3), _pumpTime3.value.toString())
 
         return@withContext true
     }
