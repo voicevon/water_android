@@ -14,6 +14,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -25,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
@@ -50,6 +52,8 @@ fun SensorDebugScreen(
     var debugMode by remember { mutableStateOf("BLE") } // "BLE" or "MQTT"
     var isMqttStarted by remember { mutableStateOf(false) }
     val isMqttConnected by MqttService.isConnected.collectAsState()
+    
+    var prefixName by remember { mutableStateOf("dongzhan") }
     
     val dataPointsAll = remember { Array(4) { mutableStateListOf<SensorDataPoint>() } }
     var latestPoint by remember { mutableStateOf(SensorDataPoint(0, 0, 0, 0)) }
@@ -96,6 +100,10 @@ fun SensorDebugScreen(
         } else {
             hasPermissions = true
         }
+        
+        // 从 SharedPreferences 加载 prefixName
+        val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
+        prefixName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
     }
 
     LaunchedEffect(debugMode) {
@@ -106,45 +114,63 @@ fun SensorDebugScreen(
         }
         latestPoint = SensorDataPoint(0, 0, 0, 0)
         
-        if (debugMode == "MQTT") {
-            isMqttStarted = true
-            MqttService.publish(context, MqttTopics.SENSOR_CMD, "start")
-            android.widget.Toast.makeText(context, "已开始 MQTT 发送", android.widget.Toast.LENGTH_SHORT).show()
-            MqttService.latestSensorRawData.collect { data ->
-                if (data != null && data.size >= 4) {
-                    packetCount++
-                    val ch0 = data[0]
-                    val ch1 = data[1]
-                    val ch2 = data[2]
-                    val ch3 = data[3]
-                    
-                    // UI左起 Ch4(对应物理ch3), Ch3(物理ch2), Ch2(物理ch1), Ch1(物理ch0)
-                    val physicalChannels = arrayOf(ch3, ch2, ch1, ch0)
-                    
-                    for (i in 0 until 4) {
-                        val rawValue = physicalChannels[i]
-                        val filteredValue = dataProcessors[i].pushRaw(rawValue)
-                        val baseline = dataProcessors[i].pushBaseline(filteredValue)
-                        val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
+        if (debugMode != "MQTT" && isMqttStarted) {
+            isMqttStarted = false
+        }
+    }
+
+    LaunchedEffect(isMqttStarted, prefixName) {
+        if (isMqttStarted && debugMode == "MQTT") {
+            packetCount = 0
+            lastSeqNum = -1
+            for (i in 0 until 4) {
+                dataPointsAll[i].clear()
+            }
+            latestPoint = SensorDataPoint(0, 0, 0, 0)
+            
+            val prefix = "water/$prefixName"
+            val sensorDataTopic = "$prefix/sensor/data"
+            val sensorCmdTopic = "$prefix/sensor/cmd"
+            
+            Toast.makeText(context, "开始 MQTT 调试: $sensorDataTopic", Toast.LENGTH_SHORT).show()
+            MqttService.subscribe(context, sensorDataTopic)
+            MqttService.publish(context, sensorCmdTopic, "start")
+            
+            try {
+                MqttService.latestSensorRawData.collect { data ->
+                    if (data != null && data.size >= 4) {
+                        packetCount++
+                        val ch0 = data[0]
+                        val ch1 = data[1]
+                        val ch2 = data[2]
+                        val ch3 = data[3]
                         
-                        val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
+                        // UI左起 Ch4(对应物理ch3), Ch3(物理ch2), Ch2(物理ch1), Ch1(物理ch0)
+                        val physicalChannels = arrayOf(ch3, ch2, ch1, ch0)
                         
-                        dataPointsAll[i].add(newPoint)
-                        if (dataPointsAll[i].size > maxPoints) {
-                            dataPointsAll[i].removeAt(0)
-                        }
-                        
-                        if (i == selectedChannel) {
-                            latestPoint = newPoint
+                        for (i in 0 until 4) {
+                            val rawValue = physicalChannels[i]
+                            val filteredValue = dataProcessors[i].pushRaw(rawValue)
+                            val baseline = dataProcessors[i].pushBaseline(filteredValue)
+                            val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
+                            
+                            val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
+                            
+                            dataPointsAll[i].add(newPoint)
+                            if (dataPointsAll[i].size > maxPoints) {
+                                dataPointsAll[i].removeAt(0)
+                            }
+                            
+                            if (i == selectedChannel) {
+                                latestPoint = newPoint
+                            }
                         }
                     }
                 }
-            }
-        } else {
-            if (isMqttStarted) {
-                isMqttStarted = false
-                MqttService.publish(context, MqttTopics.SENSOR_CMD, "stop")
-                android.widget.Toast.makeText(context, "已停止 MQTT 发送", android.widget.Toast.LENGTH_SHORT).show()
+            } finally {
+                // 当调试结束或配置改变时，自动发送 stop 命令并取消订阅旧的 topic
+                MqttService.publish(context, sensorCmdTopic, "stop")
+                MqttService.unsubscribe(context, sensorDataTopic)
             }
         }
     }
@@ -230,9 +256,12 @@ fun SensorDebugScreen(
             } catch (e: SecurityException) {
                 Log.e("SensorDebug", "Permission denied for stopScan", e)
             }
-            if (debugMode == "MQTT") {
-                MqttService.publish(context, MqttTopics.SENSOR_CMD, "stop")
-                android.widget.Toast.makeText(context, "已停止 MQTT 发送", android.widget.Toast.LENGTH_SHORT).show()
+            if (debugMode == "MQTT" && isMqttStarted) {
+                val prefix = "water/$prefixName"
+                val sensorDataTopic = "$prefix/sensor/data"
+                val sensorCmdTopic = "$prefix/sensor/cmd"
+                MqttService.publish(context, sensorCmdTopic, "stop")
+                MqttService.unsubscribe(context, sensorDataTopic)
             }
         }
     }
@@ -247,7 +276,11 @@ fun SensorDebugScreen(
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
                 TopAppBar(
-                    title = { Text(if (debugMode == "BLE") "传感器调试 (BLE)" else "传感器调试 (MQTT)") },
+                    title = {
+                        Text(
+                            text = "传感器调试"
+                        )
+                    },
                     navigationIcon = {
                         IconButton(onClick = onDismissRequest) {
                             Text("❮", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 24.sp)
@@ -261,24 +294,99 @@ fun SensorDebugScreen(
                 )
 
                 PrimaryTabRow(
-                    selectedTabIndex = if (debugMode == "BLE") 0 else 1,
+                    selectedTabIndex = when (debugMode) {
+                        "BLE" -> 0
+                        "MQTT" -> 1
+                        else -> 2
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Tab(
                         selected = debugMode == "BLE",
                         onClick = { debugMode = "BLE" },
-                        text = { Text("BLE 广播", fontWeight = FontWeight.Bold) }
+                        text = { Text("BLE\n广播", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
                     )
                     Tab(
                         selected = debugMode == "MQTT",
                         onClick = { debugMode = "MQTT" },
-                        text = { Text("MQTT 网络", fontWeight = FontWeight.Bold) }
+                        text = { Text("MQTT\n网络", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
+                    )
+                    Tab(
+                        selected = debugMode == "SETTINGS",
+                        onClick = { debugMode = "SETTINGS" },
+                        text = { Text("选择\n节点", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
                     )
                 }
 
                 if (debugMode == "BLE" && !hasPermissions) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("等待蓝牙和定位权限授权...")
+                    }
+                } else if (debugMode == "SETTINGS") {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp)
+                    ) {
+                        if (isMqttStarted) {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.errorContainer,
+                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                                )
+                            ) {
+                                Text(
+                                    text = "⚠️ 调试处于运行状态，锁定配置项。请先在“MQTT网络”选项卡停止调试后再修改设置。",
+                                    modifier = Modifier.padding(12.dp),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                        } else {
+                            Card(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(bottom = 16.dp),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+                                )
+                            ) {
+                                Text(
+                                    text = "📝 配置编辑模式，完成修改后请切换到“MQTT网络”开始调试。",
+                                    modifier = Modifier.padding(12.dp),
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Medium
+                                )
+                            }
+                        }
+
+                        OutlinedTextField(
+                            value = prefixName,
+                            onValueChange = { if (!isMqttStarted) prefixName = it },
+                            label = { Text("设备/区域名称") },
+                            placeholder = { Text("例如: dongzhan, home") },
+                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                            enabled = !isMqttStarted,
+                            singleLine = true,
+                            leadingIcon = { 
+                                Text(
+                                    text = "water/", 
+                                    modifier = Modifier.padding(start = 12.dp), 
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                ) 
+                            }
+                        )
+                        Text(
+                            text = "订阅数据：\nwater/$prefixName/sensor/data\n发布命令：\nwater/$prefixName/sensor/cmd",
+                            fontSize = 12.sp,
+                            color = Color.Gray,
+                            lineHeight = 18.sp,
+                            modifier = Modifier.padding(bottom = 8.dp)
+                        )
                     }
                 } else {
                     Column(
@@ -319,6 +427,24 @@ fun SensorDebugScreen(
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Medium
                             )
+                        }
+
+                        if (debugMode == "MQTT") {
+                            Button(
+                                onClick = { 
+                                    if (!isMqttStarted) {
+                                        val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
+                                        sp.edit().putString("prefix_name", prefixName).apply()
+                                    }
+                                    isMqttStarted = !isMqttStarted 
+                                },
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = if (isMqttStarted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+                                )
+                            ) {
+                                Text(if (isMqttStarted) "停止 MQTT 调试" else "开始 MQTT 调试", fontWeight = FontWeight.Bold)
+                            }
                         }
                         
                         // Channel Selector
@@ -378,7 +504,7 @@ fun SensorDebugScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(250.dp)
+                                .weight(1f)
                                 .padding(bottom = 16.dp)
                                 .background(Color.White)
                         ) {

@@ -75,6 +75,36 @@ class MqttService : Service() {
                 context.startService(intent)
             }
         }
+
+        /**
+         * 订阅指定主题
+         */
+        fun subscribe(context: Context, topic: String) {
+            val intent = Intent(context, MqttService::class.java).apply {
+                action = "com.water.von.ACTION_SUBSCRIBE"
+                putExtra("topic", topic)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        /**
+         * 取消订阅指定主题
+         */
+        fun unsubscribe(context: Context, topic: String) {
+            val intent = Intent(context, MqttService::class.java).apply {
+                action = "com.water.von.ACTION_UNSUBSCRIBE"
+                putExtra("topic", topic)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
     }
 
     override fun onCreate() {
@@ -91,6 +121,20 @@ class MqttService : Service() {
             val payload = intent.getStringExtra("payload")
             if (topic != null && payload != null) {
                 publishInternal(topic, payload)
+            }
+            return START_STICKY
+        }
+        if (intent?.action == "com.water.von.ACTION_SUBSCRIBE") {
+            val topic = intent.getStringExtra("topic")
+            if (topic != null) {
+                subscribeInternal(topic)
+            }
+            return START_STICKY
+        }
+        if (intent?.action == "com.water.von.ACTION_UNSUBSCRIBE") {
+            val topic = intent.getStringExtra("topic")
+            if (topic != null) {
+                unsubscribeInternal(topic)
             }
             return START_STICKY
         }
@@ -121,6 +165,32 @@ class MqttService : Service() {
             }
         } else {
             addConsoleLog("发布消息失败: MQTT 未连接 (isConnected=false)")
+        }
+    }
+
+    private fun subscribeInternal(topic: String) {
+        if (mqttClient?.isConnected == true) {
+            try {
+                mqttClient?.subscribe(topic, 1)
+                addConsoleLog("成功订阅主题: $topic")
+            } catch (e: Exception) {
+                addConsoleLog("订阅主题失败 [$topic]: ${e.message}")
+            }
+        } else {
+            addConsoleLog("订阅主题失败: MQTT 未连接 ($topic)")
+        }
+    }
+
+    private fun unsubscribeInternal(topic: String) {
+        if (mqttClient?.isConnected == true) {
+            try {
+                mqttClient?.unsubscribe(topic)
+                addConsoleLog("成功取消订阅主题: $topic")
+            } catch (e: Exception) {
+                addConsoleLog("取消订阅主题失败 [$topic]: ${e.message}")
+            }
+        } else {
+            addConsoleLog("取消订阅主题失败: MQTT 未连接 ($topic)")
         }
     }
 
@@ -314,7 +384,7 @@ class MqttService : Service() {
         val payloadBytes = message.payload
         
         when {
-            topic == MqttTopics.SENSOR_DATA -> {
+            topic == MqttTopics.SENSOR_DATA || topic.endsWith("/sensor/data") -> {
                 try {
                     val jsonStr = String(payloadBytes, Charsets.UTF_8)
                     val json = org.json.JSONObject(jsonStr)

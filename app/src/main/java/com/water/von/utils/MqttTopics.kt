@@ -8,11 +8,11 @@ object MqttTopics {
     const val SYSTEM_INFO = "$PREFIX/system/info"
     const val PHOTO = "$PREFIX/camera/status"
     const val LOG_WILDCARD = "$PREFIX/log/+"
-    const val SENSOR_DATA = "water/sensor/data"
+    const val SENSOR_DATA = "$PREFIX/sensor/data" 
     
     // Published Topics
     const val CONTROL_TAKE_PHOTO = "$PREFIX/camera/cmd"
-    const val SENSOR_CMD = "$PREFIX/sensor/cmd"
+    const val SENSOR_CMD = "$PREFIX/sensor/cmd"   
     
     // Prefix for logs topic matching
     const val LOG_PREFIX = "$PREFIX/log/"
