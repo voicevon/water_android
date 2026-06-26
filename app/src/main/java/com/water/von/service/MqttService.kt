@@ -510,21 +510,35 @@ class MqttService : Service() {
      * 发送高优先级横幅警报通知
      */
     private fun showAlarmNotification(title: String, text: String) {
+        val sp = getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
+        val showPopup = sp.getBoolean("show_notification_popup", true)
+        if (!showPopup) {
+            return
+        }
+        val useSound = sp.getBoolean("use_notification_sound", true)
+
         val notificationIntent = Intent(this, MainActivity::class.java)
         val pendingIntent = PendingIntent.getActivity(
             this, 0, notificationIntent,
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) PendingIntent.FLAG_IMMUTABLE else 0
         )
 
-        val alarmNotification = NotificationCompat.Builder(this, ALARM_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(this, ALARM_CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setContentIntent(pendingIntent)
             .setAutoCancel(true)
-            .build()
+
+        if (useSound) {
+            builder.setDefaults(NotificationCompat.DEFAULT_ALL)
+        } else {
+            builder.setDefaults(NotificationCompat.DEFAULT_VIBRATE or NotificationCompat.DEFAULT_LIGHTS)
+            builder.setSound(null)
+        }
+
+        val alarmNotification = builder.build()
 
         val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
         manager.notify(notificationCounter.getAndIncrement(), alarmNotification)

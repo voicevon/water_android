@@ -94,7 +94,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("远程站点") },
+                            text = { Text("本地配置") },
                             onClick = {
                                 showMenu = false
                                 selectedTab = 5

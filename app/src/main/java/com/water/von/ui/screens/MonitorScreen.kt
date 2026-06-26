@@ -264,7 +264,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
         }
     }
 
-    if (showImagePreview && viewModel.latestPhotoPath.value != null) {
+    if (showImagePreview && displayFile != null) {
         val file = displayFile
         if (file != null) {
             Dialog(

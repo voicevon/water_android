@@ -69,20 +69,27 @@ fun SensorDebugScreen(
         (configuration.screenWidthDp * density).toInt().coerceAtLeast(100)
     }
 
-    val requiredPermissions = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        arrayOf(
-            Manifest.permission.BLUETOOTH_SCAN,
-            Manifest.permission.BLUETOOTH_CONNECT,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        )
-    } else {
-        arrayOf(
-            Manifest.permission.BLUETOOTH,
-            Manifest.permission.BLUETOOTH_ADMIN,
-            Manifest.permission.ACCESS_FINE_LOCATION,
-            Manifest.permission.ACCESS_COARSE_LOCATION
-        )
+    val sp = remember { context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE) }
+    val useGps = remember { sp.getBoolean("use_gps_positioning", true) }
+
+    val requiredPermissions = remember(useGps) {
+        val list = mutableListOf<String>()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            list.add(Manifest.permission.BLUETOOTH_SCAN)
+            list.add(Manifest.permission.BLUETOOTH_CONNECT)
+            if (useGps) {
+                list.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                list.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+        } else {
+            list.add(Manifest.permission.BLUETOOTH)
+            list.add(Manifest.permission.BLUETOOTH_ADMIN)
+            if (useGps) {
+                list.add(Manifest.permission.ACCESS_FINE_LOCATION)
+                list.add(Manifest.permission.ACCESS_COARSE_LOCATION)
+            }
+        }
+        list.toTypedArray()
     }
 
     val permissionLauncher = rememberLauncherForActivityResult(
@@ -91,7 +98,7 @@ fun SensorDebugScreen(
         hasPermissions = permissions.entries.all { it.value }
     }
 
-    LaunchedEffect(Unit) {
+    LaunchedEffect(requiredPermissions) {
         val allGranted = requiredPermissions.all {
             ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED
         }
@@ -101,8 +108,6 @@ fun SensorDebugScreen(
             hasPermissions = true
         }
         
-        // 从 SharedPreferences 加载 prefixName
-        val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
         prefixName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
     }
 
