@@ -17,6 +17,8 @@ import com.water.von.ui.screens.LogsScreen
 import com.water.von.ui.screens.MonitorScreen
 import com.water.von.ui.screens.SettingsScreen
 import com.water.von.ui.screens.SensorDebugScreen
+import com.water.von.ui.screens.NetworkLogsScreen
+import com.water.von.ui.screens.StationSettingsScreen
 
 /**
  * 主容器页面 MainScreen
@@ -31,6 +33,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showSensorDebugWindow by remember { mutableStateOf(false) }
+
+    val stationTitle by com.water.von.service.MqttService.stationChineseName.collectAsState()
 
     if (showAboutDialog) {
         AlertDialog(
@@ -65,7 +69,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
         topBar = {
             TopAppBar(
                 modifier = if (isLandscape) Modifier.height(36.dp) else Modifier,
-                title = { Text("济南东站污水厂", fontWeight = FontWeight.Bold, fontSize = if (isLandscape) 14.sp else 20.sp) },
+                title = { Text(stationTitle, fontWeight = FontWeight.Bold, fontSize = if (isLandscape) 14.sp else 20.sp) },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.primary,
                     titleContentColor = MaterialTheme.colorScheme.onPrimary
@@ -87,6 +91,20 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             onClick = {
                                 showMenu = false
                                 selectedTab = 3
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("远程站点") },
+                            onClick = {
+                                showMenu = false
+                                selectedTab = 5
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("网络诊断日志") },
+                            onClick = {
+                                showMenu = false
+                                selectedTab = 4
                             }
                         )
                         DropdownMenuItem(
@@ -244,6 +262,8 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     1 -> SettingsScreen()
                     2 -> LogsScreen()
                     3 -> ConfigScreen()
+                    4 -> NetworkLogsScreen()
+                    5 -> StationSettingsScreen()
                 }
             }
         }

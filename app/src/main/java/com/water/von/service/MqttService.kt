@@ -20,8 +20,14 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.util.UUID
@@ -47,104 +53,122 @@ class MqttService : Service() {
     @Volatile
     private var shouldReconnect = true
     private var reconnectDelay = 2000L // 初始重连延时 2 秒
+    private var reconnectJob: Job? = null
 
     companion object {
-        // 使用 Flow 向前台 UI 实时暴露通信状态
-        val isConnected = MutableStateFlow(false)
-        val systemStatus = MutableStateFlow("offline")
-        val systemInfo = MutableStateFlow("未接收到数据\n---\n---")
-        val latestLogChannel1 = MutableStateFlow<LogEntry?>(null)
-        val latestLogChannel2 = MutableStateFlow<LogEntry?>(null)
-        val latestLogChannel3 = MutableStateFlow<LogEntry?>(null)
-        val latestPhotoPath = MutableStateFlow<String?>(null)
-        val mqttLogs = MutableStateFlow<List<String>>(emptyList())
-        val latestSensorRawData = MutableStateFlow<IntArray?>(null)
+        // 使用 Flow 向前台 UI 实时暴露通信状态（私有可变，公有只读）
+        private val _isConnected = MutableStateFlow(false)
+        val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
+
+        private val _systemStatus = MutableStateFlow("offline")
+        val systemStatus: StateFlow<String> = _systemStatus.asStateFlow()
+
+        private val _systemInfo = MutableStateFlow("未接收到数据\n---\n---")
+        val systemInfo: StateFlow<String> = _systemInfo.asStateFlow()
+
+        private val _latestLogChannel1 = MutableStateFlow<LogEntry?>(null)
+        val latestLogChannel1: StateFlow<LogEntry?> = _latestLogChannel1.asStateFlow()
+
+        private val _latestLogChannel2 = MutableStateFlow<LogEntry?>(null)
+        val latestLogChannel2: StateFlow<LogEntry?> = _latestLogChannel2.asStateFlow()
+
+        private val _latestLogChannel3 = MutableStateFlow<LogEntry?>(null)
+        val latestLogChannel3: StateFlow<LogEntry?> = _latestLogChannel3.asStateFlow()
+
+        private val _latestPhotoPath = MutableStateFlow<String?>(null)
+        val latestPhotoPath: StateFlow<String?> = _latestPhotoPath.asStateFlow()
+
+        private val _mqttLogs = MutableStateFlow<List<String>>(emptyList())
+        val mqttLogs: StateFlow<List<String>> = _mqttLogs.asStateFlow()
+
+        private val _latestSensorRawData = MutableStateFlow<IntArray?>(null)
+        val latestSensorRawData: StateFlow<IntArray?> = _latestSensorRawData.asStateFlow()
+
+        private val _stationChineseName = MutableStateFlow("济南东站污水厂")
+        val stationChineseName: StateFlow<String> = _stationChineseName.asStateFlow()
+
+        fun updateStationChineseName(context: Context, name: String) {
+            _stationChineseName.value = name
+        }
+
+        @Volatile
+        var activeSensorPrefix: String? = null
 
         /**
-         * 向指定主题发布消息（通过 Intent 发送给 Service 避免内存泄漏）
+         * 向指定主题发布消息
          */
         fun publish(context: Context, topic: String, payload: String) {
-            val intent = Intent(context, MqttService::class.java).apply {
-                action = "com.water.von.ACTION_PUBLISH"
-                putExtra("topic", topic)
-                putExtra("payload", payload)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            MqttBus.sendCommand(MqttCommand.Publish(topic, payload))
         }
 
         /**
          * 订阅指定主题
          */
         fun subscribe(context: Context, topic: String) {
-            val intent = Intent(context, MqttService::class.java).apply {
-                action = "com.water.von.ACTION_SUBSCRIBE"
-                putExtra("topic", topic)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            MqttBus.sendCommand(MqttCommand.Subscribe(topic))
         }
 
         /**
          * 取消订阅指定主题
          */
         fun unsubscribe(context: Context, topic: String) {
-            val intent = Intent(context, MqttService::class.java).apply {
-                action = "com.water.von.ACTION_UNSUBSCRIBE"
-                putExtra("topic", topic)
-            }
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                context.startForegroundService(intent)
-            } else {
-                context.startService(intent)
-            }
+            MqttBus.sendCommand(MqttCommand.Unsubscribe(topic))
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        logManager = LogManager(applicationContext)
+        
+        // 从 SharedPreferences 中加载并初始化中文站点名
+        val sp = getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
+        val savedName = sp.getString("station_chinese_name", "济南东站污水厂") ?: "济南东站污水厂"
+        _stationChineseName.value = savedName
+
+        logManager = LogManager.getInstance(applicationContext)
         createNotificationChannels()
         serviceScope.launch { logManager.cleanOldLogs(30) }
+        serviceScope.launch {
+            MqttBus.commands.collect { cmd ->
+                when (cmd) {
+                    is MqttCommand.Publish -> publishInternal(cmd.topic, cmd.payload)
+                    is MqttCommand.Subscribe -> subscribeInternal(cmd.topic)
+                    is MqttCommand.Unsubscribe -> unsubscribeInternal(cmd.topic)
+                    is MqttCommand.Reconnect -> {
+                        shouldReconnect = true
+                        connectMqtt()
+                    }
+                }
+            }
+        }
         addConsoleLog("MqttService 已创建")
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == "com.water.von.ACTION_PUBLISH") {
-            val topic = intent.getStringExtra("topic")
-            val payload = intent.getStringExtra("payload")
-            if (topic != null && payload != null) {
-                publishInternal(topic, payload)
-            }
-            return START_STICKY
-        }
-        if (intent?.action == "com.water.von.ACTION_SUBSCRIBE") {
-            val topic = intent.getStringExtra("topic")
-            if (topic != null) {
-                subscribeInternal(topic)
-            }
-            return START_STICKY
-        }
-        if (intent?.action == "com.water.von.ACTION_UNSUBSCRIBE") {
-            val topic = intent.getStringExtra("topic")
-            if (topic != null) {
-                unsubscribeInternal(topic)
-            }
-            return START_STICKY
-        }
-
         if (!isServiceRunning) {
             isServiceRunning = true
             startForegroundService()
             shouldReconnect = true
             connectMqtt()
         }
+
+        if (intent?.action == "com.water.von.ACTION_PUBLISH") {
+            val topic = intent.getStringExtra("topic")
+            val payload = intent.getStringExtra("payload")
+            if (topic != null && payload != null) {
+                publishInternal(topic, payload)
+            }
+        } else if (intent?.action == "com.water.von.ACTION_SUBSCRIBE") {
+            val topic = intent.getStringExtra("topic")
+            if (topic != null) {
+                subscribeInternal(topic)
+            }
+        } else if (intent?.action == "com.water.von.ACTION_UNSUBSCRIBE") {
+            val topic = intent.getStringExtra("topic")
+            if (topic != null) {
+                unsubscribeInternal(topic)
+            }
+        }
+
         return START_STICKY
     }
 
@@ -194,15 +218,6 @@ class MqttService : Service() {
         }
     }
 
-    override fun onDestroy() {
-        shouldReconnect = false
-        disconnectMqtt()
-        serviceJob.cancel()
-        isServiceRunning = false
-        addConsoleLog("MqttService 已销毁")
-        super.onDestroy()
-    }
-
     override fun onBind(intent: Intent?): IBinder? {
         return null
     }
@@ -213,7 +228,7 @@ class MqttService : Service() {
     private fun addConsoleLog(message: String) {
         Log.i(TAG, message)
         val timestamp = java.text.SimpleDateFormat("HH:mm:ss", java.util.Locale.getDefault()).format(java.util.Date())
-        mqttLogs.update { current ->
+        _mqttLogs.update { current ->
             (listOf("[$timestamp] $message") + current).take(100)
         }
     }
@@ -269,15 +284,16 @@ class MqttService : Service() {
     }
 
     /**
-     * 连接 MQTT 代理服务器
+     * 连接 MQTT 代理服务器（内置互斥取消防止重连风暴）
      */
     private fun connectMqtt() {
-        serviceScope.launch {
-            val sharedPreferences = getSharedPreferences("mqtt_config", Context.MODE_PRIVATE)
-            val brokerIp = sharedPreferences.getString("broker_ip", "") ?: ""
+        reconnectJob?.cancel()
+        reconnectJob = serviceScope.launch {
+            val sharedPreferences = com.water.von.utils.SecurePrefs.get(applicationContext)
+            val brokerIp = sharedPreferences.getString("broker_ip", "voicevon.vicp.io") ?: "voicevon.vicp.io"
             val brokerPort = sharedPreferences.getInt("broker_port", 1883)
-            val username = sharedPreferences.getString("username", "") ?: ""
-            val password = sharedPreferences.getString("password", "") ?: ""
+            val username = sharedPreferences.getString("username", "von") ?: "von"
+            val password = sharedPreferences.getString("password", "von123456") ?: "von123456"
             val customClientId = sharedPreferences.getString("client_id", "") ?: ""
             
             val brokerUrl = "tcp://$brokerIp:$brokerPort"
@@ -302,14 +318,14 @@ class MqttService : Service() {
 
                 mqttClient?.setCallback(object : MqttCallbackExtended {
                     override fun connectComplete(reconnect: Boolean, serverURI: String?) {
-                        isConnected.value = true
+                        _isConnected.value = true
                         reconnectDelay = 2000L // 重置重连延迟
                         addConsoleLog("MQTT 连接成功: $serverURI")
                         subscribeToTopics()
                     }
 
                     override fun connectionLost(cause: Throwable?) {
-                        isConnected.value = false
+                        _isConnected.value = false
                         addConsoleLog("MQTT 连接丢失: ${cause?.message}")
                         if (shouldReconnect) {
                             triggerReconnection()
@@ -338,7 +354,7 @@ class MqttService : Service() {
 
             } catch (e: Exception) {
                 addConsoleLog("MQTT 连接失败异常: ${e.message}")
-                isConnected.value = false
+                _isConnected.value = false
                 if (shouldReconnect) {
                     triggerReconnection()
                 }
@@ -355,7 +371,7 @@ class MqttService : Service() {
             mqttClient?.subscribe(MqttTopics.SYSTEM_INFO, 1)
             mqttClient?.subscribe(MqttTopics.PHOTO, 1)
             mqttClient?.subscribe(MqttTopics.LOG_WILDCARD, 1) // 通配符订阅 1, 2, 3 通道日志
-            mqttClient?.subscribe(MqttTopics.SENSOR_DATA, 1) // 订阅水传感器原始数据
+            mqttClient?.subscribe(MqttTopics.SENSOR_STATUS_TOPIC, 1) // 订阅全局水传感器上报数据主题
             addConsoleLog("已成功订阅监控主题队列")
         } catch (e: Exception) {
             addConsoleLog("订阅主题失败: ${e.message}")
@@ -363,10 +379,11 @@ class MqttService : Service() {
     }
 
     /**
-     * 触发指数避退延迟重连
+     * 触发指数避退延迟重连（内置任务互斥防止风暴）
      */
     private fun triggerReconnection() {
-        serviceScope.launch {
+        reconnectJob?.cancel()
+        reconnectJob = serviceScope.launch {
             addConsoleLog("计划在 ${reconnectDelay / 1000} 秒后重新连接...")
             kotlinx.coroutines.delay(reconnectDelay)
             // 每次重连失败，重连延迟翻倍，最大延迟60秒
@@ -384,28 +401,31 @@ class MqttService : Service() {
         val payloadBytes = message.payload
         
         when {
-            topic == MqttTopics.SENSOR_DATA || topic.endsWith("/sensor/data") -> {
+            topic == MqttTopics.SENSOR_STATUS_TOPIC -> {
                 try {
                     val jsonStr = String(payloadBytes, Charsets.UTF_8)
                     val json = org.json.JSONObject(jsonStr)
-                    val ch1 = json.optInt("ch1", 0)
-                    val ch2 = json.optInt("ch2", 0)
-                    val ch3 = json.optInt("ch3", 0)
-                    val ch4 = json.optInt("ch4", 0)
-                    latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4)
+                    val name = json.optString("name", "")
+                    if (name.isNotEmpty() && name == activeSensorPrefix) {
+                        val ch1 = json.optInt("ch1", 0)
+                        val ch2 = json.optInt("ch2", 0)
+                        val ch3 = json.optInt("ch3", 0)
+                        val ch4 = json.optInt("ch4", 0)
+                        _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4)
+                    }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to parse sensor data: ${e.message}", e)
+                    Log.e(TAG, "Failed to parse sensor status data: ${e.message}", e)
                 }
             }
 
             topic == MqttTopics.SYSTEM_STATUS -> {
                 val status = String(payloadBytes, Charsets.UTF_8)
-                systemStatus.value = status
+                _systemStatus.value = status
             }
             
             topic == MqttTopics.SYSTEM_INFO -> {
                 val info = String(payloadBytes, Charsets.UTF_8)
-                systemInfo.value = info
+                _systemInfo.value = info
             }
 
             topic == MqttTopics.PHOTO -> {
@@ -416,7 +436,7 @@ class MqttService : Service() {
                 serviceScope.launch {
                     val relativePath = logManager.savePhoto(payloadBytes)
                     if (relativePath.isNotEmpty()) {
-                        latestPhotoPath.value = relativePath
+                        _latestPhotoPath.value = relativePath
                         // 同时将新图片写入日志归档记录中（假定当前触发的是活跃的泵启动）
                         logManager.writeLog(
                             channel = 1, // 缺省至通道 1
@@ -466,9 +486,9 @@ class MqttService : Service() {
 
     private fun updateChannelFlow(channelId: Int, logEntry: LogEntry) {
         when (channelId) {
-            1 -> latestLogChannel1.value = logEntry
-            2 -> latestLogChannel2.value = logEntry
-            3 -> latestLogChannel3.value = logEntry
+            1 -> _latestLogChannel1.value = logEntry
+            2 -> _latestLogChannel2.value = logEntry
+            3 -> _latestLogChannel3.value = logEntry
         }
     }
 
@@ -503,10 +523,20 @@ class MqttService : Service() {
             }
             mqttClient?.close()
             mqttClient = null
-            isConnected.value = false
+            _isConnected.value = false
             addConsoleLog("已断开 MQTT 连接")
         } catch (e: Exception) {
             Log.e(TAG, "断开连接失败: ${e.message}")
         }
+    }
+
+    override fun onDestroy() {
+        shouldReconnect = false
+        reconnectJob?.cancel()
+        disconnectMqtt()
+        serviceJob.cancel()
+        isServiceRunning = false
+        addConsoleLog("MqttService 已销毁")
+        super.onDestroy()
     }
 }

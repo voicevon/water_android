@@ -87,4 +87,7 @@ dependencies {
 
   // Coil for async image loading
   implementation("io.coil-kt:coil-compose:2.6.0")
+
+  // Security
+  implementation(libs.androidx.security.crypto)
 }

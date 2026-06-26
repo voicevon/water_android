@@ -123,6 +123,9 @@ class ParametersViewModel(application: Application) : AndroidViewModel(applicati
      * 将所有通道的参数一次性通过 MQTT 远端同步下发
      */
     suspend fun syncAllParameters(): Boolean = withContext(Dispatchers.IO) {
+        if (!MqttService.isConnected.value) {
+            return@withContext false
+        }
         val context = getApplication<Application>()
         
         // Channel 1

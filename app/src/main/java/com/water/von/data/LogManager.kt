@@ -15,8 +15,19 @@ import java.util.Locale
  * 本地日志与照片沙盒存储管理器
  * 负责日志分卷归档、读取以及照片持久化
  */
-class LogManager(private val context: Context) {
+class LogManager private constructor(private val context: Context) {
     private val TAG = "LogManager"
+
+    companion object {
+        @Volatile
+        private var instance: LogManager? = null
+
+        fun getInstance(context: Context): LogManager {
+            return instance ?: synchronized(this) {
+                instance ?: LogManager(context.applicationContext).also { instance = it }
+            }
+        }
+    }
 
     // 获取沙盒私有根路径：/sdcard/Android/data/com.water.von/files/ 或降级
     private val baseDir: File = context.getExternalFilesDir(null) ?: context.filesDir

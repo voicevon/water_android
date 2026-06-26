@@ -24,7 +24,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun getBrokerUrl(): String {
-        val ip = sharedPrefs.getString("broker_ip", "") ?: ""
+        val ip = sharedPrefs.getString("broker_ip", "voicevon.vicp.io") ?: "voicevon.vicp.io"
         val port = sharedPrefs.getInt("broker_port", 1883)
         return if (ip.isEmpty()) "未配置 Broker" else "$ip:$port"
     }
@@ -93,23 +93,12 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
 
     private fun isWaterDetected(msg: String): Boolean {
+        val noWaterKeywords = listOf("泵停", "停止", "关闭", "无水", "排空", "结束", "失败", "未检测")
+        if (noWaterKeywords.any { msg.contains(it) }) {
+            return false
+        }
         val hasWaterKeywords = listOf("泵启", "水泵启动", "启动", "有水", "抽水")
-        val noWaterKeywords = listOf("泵停", "停止", "关闭", "无水", "排空", "结束")
-        
-        var isWater = false
-        for (kw in hasWaterKeywords) {
-            if (msg.contains(kw)) {
-                isWater = true
-                break
-            }
-        }
-        for (kw in noWaterKeywords) {
-            if (msg.contains(kw)) {
-                isWater = false
-                break
-            }
-        }
-        return isWater
+        return hasWaterKeywords.any { msg.contains(it) }
     }
 
     private fun updateStatusFromMessage(msg: String) {

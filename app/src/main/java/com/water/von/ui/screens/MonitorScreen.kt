@@ -97,29 +97,25 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 name = "次氯酸钠",
                 hasWater = pipe1HasWater,
                 latestMsg = log1?.message ?: "暂无消息",
-                onClick = { viewModel.setPipeHasWater(1, !pipe1HasWater) },
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             PipeCard(
                 name = "碳源",
                 hasWater = pipe2HasWater,
                 latestMsg = log2?.message ?: "暂无消息",
-                onClick = { viewModel.setPipeHasWater(2, !pipe2HasWater) },
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             PipeCard(
                 name = "铁盐",
                 hasWater = pipe3HasWater,
                 latestMsg = log3?.message ?: "暂无消息",
-                onClick = { viewModel.setPipeHasWater(3, !pipe3HasWater) },
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
 
         // 2. 中部分：10步采样流程起伏式步骤条
         StepProgressBar(
-            currentIndex = currentStatusIndex,
-            onStepClick = { index -> viewModel.setCurrentStatusIndex(index) }
+            currentIndex = currentStatusIndex
         )
 
         Spacer(modifier = Modifier.height(24.dp))
@@ -329,7 +325,6 @@ fun PipeCard(
     name: String,
     hasWater: Boolean,
     latestMsg: String,
-    onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val backgroundColor = if (hasWater) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
@@ -338,7 +333,6 @@ fun PipeCard(
 
     Card(
         modifier = modifier
-            .clickable { onClick() }
             .padding(2.dp),
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
         border = if (hasWater) BorderStroke(1.5.dp, strokeColor) else null,
@@ -383,8 +377,7 @@ fun PipeCard(
  */
 @Composable
 fun StepProgressBar(
-    currentIndex: Int,
-    onStepClick: (Int) -> Unit
+    currentIndex: Int
 ) {
     val steps = listOf("空闲", "待稳", "取头样", "延时", "取中样", "延时", "取尾样", "延时", "排空", "结束")
     
@@ -492,8 +485,7 @@ fun StepProgressBar(
                             .offset(x = xPos, y = yPos)
                             .size(28.dp)
                             .clip(RoundedCornerShape(50))
-                            .background(nodeColor)
-                            .clickable { onStepClick(index) },
+                            .background(nodeColor),
                         contentAlignment = Alignment.Center
                     ) {
                         Text(

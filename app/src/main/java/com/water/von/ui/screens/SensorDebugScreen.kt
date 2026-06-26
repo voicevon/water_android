@@ -128,13 +128,10 @@ fun SensorDebugScreen(
             }
             latestPoint = SensorDataPoint(0, 0, 0, 0)
             
-            val prefix = "water/$prefixName"
-            val sensorDataTopic = "$prefix/sensor/data"
-            val sensorCmdTopic = "$prefix/sensor/cmd"
-            
-            Toast.makeText(context, "开始 MQTT 调试: $sensorDataTopic", Toast.LENGTH_SHORT).show()
-            MqttService.subscribe(context, sensorDataTopic)
-            MqttService.publish(context, sensorCmdTopic, "start")
+            MqttService.activeSensorPrefix = prefixName
+            Toast.makeText(context, "开始 MQTT 调试: $prefixName", Toast.LENGTH_SHORT).show()
+            MqttService.subscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+            MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, prefixName)
             
             try {
                 MqttService.latestSensorRawData.collect { data ->
@@ -169,11 +166,14 @@ fun SensorDebugScreen(
                 }
             } finally {
                 // 当调试结束或配置改变时，自动发送 stop 命令并取消订阅旧的 topic
-                MqttService.publish(context, sensorCmdTopic, "stop")
-                MqttService.unsubscribe(context, sensorDataTopic)
+                MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
+                MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+                MqttService.activeSensorPrefix = null
             }
         }
     }
+
+    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
 
     DisposableEffect(hasPermissions, debugMode) {
         var scanner: BluetoothLeScanner? = null
@@ -198,37 +198,39 @@ fun SensorDebugScreen(
                         override fun onScanResult(callbackType: Int, result: ScanResult?) {
                             super.onScanResult(callbackType, result)
                             result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
-                                if (data.size >= 8) {
-                                    val ch0 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
-                                    val ch1 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
-                                    val ch2 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
-                                    val ch3 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
-                                    
-                                    // 使用序列号 (seq_num) 来判断去重，抛弃相同的数据包
-                                    val seqNum = if (data.size > 8) data[8].toInt() and 0xFF else -1
-                                    
-                                    if (seqNum == -1 || seqNum != lastSeqNum) {
-                                        lastSeqNum = seqNum
-                                        packetCount++
+                                mainHandler.post {
+                                    if (data.size >= 8) {
+                                        val ch0 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
+                                        val ch1 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
+                                        val ch2 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+                                        val ch3 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
                                         
-                                        // UI左起 Ch4(对应物理ch3), Ch3(物理ch2), Ch2(物理ch1), Ch1(物理ch0)
-                                        val physicalChannels = arrayOf(ch3, ch2, ch1, ch0) 
+                                        // 使用序列号 (seq_num) 来判断去重，抛弃相同的数据包
+                                        val seqNum = if (data.size > 8) data[8].toInt() and 0xFF else -1
                                         
-                                        for (i in 0 until 4) {
-                                            val rawValue = physicalChannels[i]
-                                            val filteredValue = dataProcessors[i].pushRaw(rawValue)
-                                            val baseline = dataProcessors[i].pushBaseline(filteredValue)
-                                            val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
+                                        if (seqNum == -1 || seqNum != lastSeqNum) {
+                                            lastSeqNum = seqNum
+                                            packetCount++
                                             
-                                            val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
+                                            // UI左起 Ch4(对应物理ch3), Ch3(物理ch2), Ch2(物理ch1), Ch1(物理ch0)
+                                            val physicalChannels = arrayOf(ch3, ch2, ch1, ch0) 
                                             
-                                            dataPointsAll[i].add(newPoint)
-                                            if (dataPointsAll[i].size > maxPoints) {
-                                                dataPointsAll[i].removeAt(0)
-                                            }
-                                            
-                                            if (i == selectedChannel) {
-                                                latestPoint = newPoint
+                                            for (i in 0 until 4) {
+                                                val rawValue = physicalChannels[i]
+                                                val filteredValue = dataProcessors[i].pushRaw(rawValue)
+                                                val baseline = dataProcessors[i].pushBaseline(filteredValue)
+                                                val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
+                                                
+                                                val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
+                                                
+                                                dataPointsAll[i].add(newPoint)
+                                                if (dataPointsAll[i].size > maxPoints) {
+                                                    dataPointsAll[i].removeAt(0)
+                                                }
+                                                
+                                                if (i == selectedChannel) {
+                                                    latestPoint = newPoint
+                                                }
                                             }
                                         }
                                     }
@@ -257,11 +259,9 @@ fun SensorDebugScreen(
                 Log.e("SensorDebug", "Permission denied for stopScan", e)
             }
             if (debugMode == "MQTT" && isMqttStarted) {
-                val prefix = "water/$prefixName"
-                val sensorDataTopic = "$prefix/sensor/data"
-                val sensorCmdTopic = "$prefix/sensor/cmd"
-                MqttService.publish(context, sensorCmdTopic, "stop")
-                MqttService.unsubscribe(context, sensorDataTopic)
+                MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
+                MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+                MqttService.activeSensorPrefix = null
             }
         }
     }
@@ -293,11 +293,11 @@ fun SensorDebugScreen(
                     )
                 )
 
+                // 仅保留 BLE广播 与 MQTT网络 两个选项卡，移除“选择节点”配置页面
                 PrimaryTabRow(
                     selectedTabIndex = when (debugMode) {
                         "BLE" -> 0
-                        "MQTT" -> 1
-                        else -> 2
+                        else -> 1
                     },
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -311,82 +311,11 @@ fun SensorDebugScreen(
                         onClick = { debugMode = "MQTT" },
                         text = { Text("MQTT\n网络", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
                     )
-                    Tab(
-                        selected = debugMode == "SETTINGS",
-                        onClick = { debugMode = "SETTINGS" },
-                        text = { Text("选择\n节点", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
-                    )
                 }
 
                 if (debugMode == "BLE" && !hasPermissions) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         Text("等待蓝牙和定位权限授权...")
-                    }
-                } else if (debugMode == "SETTINGS") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp)
-                    ) {
-                        if (isMqttStarted) {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                                    contentColor = MaterialTheme.colorScheme.onErrorContainer
-                                )
-                            ) {
-                                Text(
-                                    text = "⚠️ 调试处于运行状态，锁定配置项。请先在“MQTT网络”选项卡停止调试后再修改设置。",
-                                    modifier = Modifier.padding(12.dp),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                            }
-                        } else {
-                            Card(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(bottom = 16.dp),
-                                colors = CardDefaults.cardColors(
-                                    containerColor = MaterialTheme.colorScheme.primaryContainer,
-                                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer
-                                )
-                            ) {
-                                Text(
-                                    text = "📝 配置编辑模式，完成修改后请切换到“MQTT网络”开始调试。",
-                                    modifier = Modifier.padding(12.dp),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
-                            }
-                        }
-
-                        OutlinedTextField(
-                            value = prefixName,
-                            onValueChange = { if (!isMqttStarted) prefixName = it },
-                            label = { Text("设备/区域名称") },
-                            placeholder = { Text("例如: dongzhan, home") },
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-                            enabled = !isMqttStarted,
-                            singleLine = true,
-                            leadingIcon = { 
-                                Text(
-                                    text = "water/", 
-                                    modifier = Modifier.padding(start = 12.dp), 
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                ) 
-                            }
-                        )
-                        Text(
-                            text = "订阅数据：\nwater/$prefixName/sensor/data\n发布命令：\nwater/$prefixName/sensor/cmd",
-                            fontSize = 12.sp,
-                            color = Color.Gray,
-                            lineHeight = 18.sp,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
                     }
                 } else {
                     Column(
@@ -432,9 +361,10 @@ fun SensorDebugScreen(
                         if (debugMode == "MQTT") {
                             Button(
                                 onClick = { 
+                                    // 每次开始调试前，重新从全局配置加载最新的设备英文名称，确保立即生效
                                     if (!isMqttStarted) {
                                         val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
-                                        sp.edit().putString("prefix_name", prefixName).apply()
+                                        prefixName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
                                     }
                                     isMqttStarted = !isMqttStarted 
                                 },

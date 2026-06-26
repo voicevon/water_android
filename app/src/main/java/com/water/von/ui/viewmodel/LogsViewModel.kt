@@ -18,7 +18,7 @@ import java.util.Locale
  * 负责本地沙盒日志流的检索、筛选与异步加载
  */
 class LogsViewModel(application: Application) : AndroidViewModel(application) {
-    private val logManager = LogManager(application)
+    private val logManager = LogManager.getInstance(application)
 
     private val _selectedDate = MutableStateFlow("")
     val selectedDate: StateFlow<String> = _selectedDate

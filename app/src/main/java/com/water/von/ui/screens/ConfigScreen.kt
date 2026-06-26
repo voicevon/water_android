@@ -34,7 +34,6 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
     val password by viewModel.password.collectAsState()
     val clientId by viewModel.clientId.collectAsState()
     val isConnected by viewModel.isConnected.collectAsState()
-    val consoleLogs by viewModel.consoleLogs.collectAsState()
 
     var isPasswordVisible by remember { mutableStateOf(false) }
     val mainScrollState = rememberScrollState()
@@ -127,48 +126,5 @@ fun ConfigScreen(viewModel: ConfigViewModel = viewModel()) {
             )
         }
 
-        // 3. 网络日志控制台看板
-        Text(
-            text = "网络底层诊断日志",
-            style = MaterialTheme.typography.titleMedium,
-            fontWeight = FontWeight.Bold
-        )
-
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(180.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Color(0xFF1E1E1E)) // 纯黑底色，命令行质感
-                .padding(8.dp)
-        ) {
-            val consoleScrollState = rememberScrollState()
-            
-            // 实时打印滚动诊断日志
-            Column(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .verticalScroll(consoleScrollState),
-                verticalArrangement = Arrangement.spacedBy(4.dp)
-            ) {
-                if (consoleLogs.isEmpty()) {
-                    Text(
-                        text = "控制台空闲，等待日志...",
-                        color = Color.LightGray,
-                        fontFamily = FontFamily.Monospace,
-                        fontSize = 12.sp
-                    )
-                } else {
-                    consoleLogs.forEach { log ->
-                        Text(
-                            text = log,
-                            color = if (log.contains("连接成功")) Color(0xFF4CAF50) else if (log.contains("失败") || log.contains("丢失")) Color(0xFFF44336) else Color(0xFFE0E0E0),
-                            fontFamily = FontFamily.Monospace,
-                            fontSize = 12.sp
-                        )
-                    }
-                }
-            }
-        }
     }
 }

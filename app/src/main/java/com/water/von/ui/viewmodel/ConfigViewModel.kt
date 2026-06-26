@@ -14,7 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
  * 负责管理 MQTT 连接配置表单并触发前台服务重连
  */
 class ConfigViewModel(application: Application) : AndroidViewModel(application) {
-    private val sharedPrefs = application.getSharedPreferences("mqtt_config", Context.MODE_PRIVATE)
+    private val sharedPrefs = com.water.von.utils.SecurePrefs.get(application)
 
     // 表单状态 Flow
     private val _brokerIp = MutableStateFlow("")
@@ -50,15 +50,15 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
      * 从 SharedPreferences 中加载配置
      */
     fun loadConfig() {
-        _brokerIp.value = sharedPrefs.getString("broker_ip", "") ?: ""
+        _brokerIp.value = sharedPrefs.getString("broker_ip", "voicevon.vicp.io") ?: "voicevon.vicp.io"
         _brokerPort.value = sharedPrefs.getInt("broker_port", 1883)
-        _username.value = sharedPrefs.getString("username", "") ?: ""
-        _password.value = sharedPrefs.getString("password", "") ?: ""
+        _username.value = sharedPrefs.getString("username", "von") ?: "von"
+        _password.value = sharedPrefs.getString("password", "von123456") ?: "von123456"
         _clientId.value = sharedPrefs.getString("client_id", "") ?: ""
     }
 
     /**
-     * 保存当前表单配置到 SharedPreferences 并重启前台 MqttService 连接
+     * 保存当前表单配置到 SharedPreferences 并通知重连
      */
     fun saveAndConnect() {
         sharedPrefs.edit().apply {
@@ -70,16 +70,14 @@ class ConfigViewModel(application: Application) : AndroidViewModel(application) 
             apply()
         }
 
-        // 重新启动/重启 MQTT Foreground Service
+        // 保证后台常驻服务启动并通知内部重连
         val context = getApplication<Application>()
         val serviceIntent = Intent(context, MqttService::class.java)
-        
-        context.stopService(serviceIntent)
-        // 保证在 Android 8.0+ 使用 startForegroundService
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             context.startForegroundService(serviceIntent)
         } else {
             context.startService(serviceIntent)
         }
+        com.water.von.service.MqttBus.sendCommand(com.water.von.service.MqttCommand.Reconnect)
     }
 }
