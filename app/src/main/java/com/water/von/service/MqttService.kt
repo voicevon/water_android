@@ -91,6 +91,13 @@ class MqttService : Service() {
             _stationChineseName.value = name
         }
 
+        private val _stationEnglishName = MutableStateFlow("dongzhan")
+        val stationEnglishName: StateFlow<String> = _stationEnglishName.asStateFlow()
+
+        fun updateStationEnglishName(context: Context, name: String) {
+            _stationEnglishName.value = name
+        }
+
         @Volatile
         var activeSensorPrefix: String? = null
 
@@ -119,10 +126,12 @@ class MqttService : Service() {
     override fun onCreate() {
         super.onCreate()
         
-        // 从 SharedPreferences 中加载并初始化中文站点名
+        // 从 SharedPreferences 中加载并初始化中英文站点名
         val sp = getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
         val savedName = sp.getString("station_chinese_name", "济南东站污水厂") ?: "济南东站污水厂"
         _stationChineseName.value = savedName
+        val savedEnglishName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
+        _stationEnglishName.value = savedEnglishName
 
         logManager = LogManager.getInstance(applicationContext)
         createNotificationChannels()
@@ -369,7 +378,7 @@ class MqttService : Service() {
         try {
             mqttClient?.subscribe(MqttTopics.SYSTEM_STATUS, 1)
             mqttClient?.subscribe(MqttTopics.SYSTEM_INFO, 1)
-            mqttClient?.subscribe(MqttTopics.PHOTO, 1)
+            mqttClient?.subscribe(MqttTopics.PHOTO_WILDCARD, 1)
             mqttClient?.subscribe(MqttTopics.LOG_WILDCARD, 1) // 通配符订阅 1, 2, 3 通道日志
             mqttClient?.subscribe(MqttTopics.SENSOR_STATUS_TOPIC, 1) // 订阅全局水传感器上报数据主题
             addConsoleLog("已成功订阅监控主题队列")
@@ -428,7 +437,12 @@ class MqttService : Service() {
                 _systemInfo.value = info
             }
 
-            topic == MqttTopics.PHOTO -> {
+            topic.startsWith("water/photo/status/") -> {
+                val stationName = topic.substringAfter("water/photo/status/")
+                if (stationName != _stationEnglishName.value) {
+                    addConsoleLog("收到其他站点的图片回传 ($stationName)，已忽略")
+                    return
+                }
                 if (payloadBytes.size > 5 * 1024 * 1024) { // 5MB 上限
                     addConsoleLog("图片过大，已忽略: ${payloadBytes.size} bytes")
                     return

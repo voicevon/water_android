@@ -145,8 +145,8 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         if (isTakingPhoto.value) return
         isTakingPhoto.value = true
 
-        // 发送控制指令至 MQTT 主题
-        MqttService.publish(context, MqttTopics.CONTROL_TAKE_PHOTO, "take")
+        // 发送控制指令至 MQTT 主题，载荷为当前目标站点的英文名
+        MqttService.publish(context, MqttTopics.CONTROL_TAKE_PHOTO, MqttService.stationEnglishName.value)
 
         // 启动 15 秒超时强制解锁，防止因丢包或树莓派离线导致按钮永久卡死
         timeoutJob?.cancel()

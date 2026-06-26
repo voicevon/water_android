@@ -113,6 +113,7 @@ fun StationSettingsScreen() {
                 
                 // 同步更新全局的中英文参数
                 MqttService.updateStationChineseName(context, chineseName)
+                MqttService.updateStationEnglishName(context, englishName)
                 
                 Toast.makeText(context, "站点配置已保存，立即生效", Toast.LENGTH_SHORT).show()
             },
