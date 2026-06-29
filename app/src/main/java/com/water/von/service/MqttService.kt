@@ -5,17 +5,26 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothManager
+import android.bluetooth.le.BluetoothLeScanner
+import android.bluetooth.le.ScanCallback
+import android.bluetooth.le.ScanFilter
+import android.bluetooth.le.ScanResult
+import android.bluetooth.le.ScanSettings
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.water.von.MainActivity
 import com.water.von.data.LogEntry
 import com.water.von.utils.MqttTopics
 import com.water.von.data.LogManager
+import com.water.von.utils.DataProcessor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -121,6 +130,27 @@ class MqttService : Service() {
         fun unsubscribe(context: Context, topic: String) {
             MqttBus.sendCommand(MqttCommand.Unsubscribe(topic))
         }
+
+        private val _isBleScanning = MutableStateFlow(false)
+        val isBleScanning: StateFlow<Boolean> = _isBleScanning.asStateFlow()
+
+        fun startBleScan(context: Context) {
+            val intent = Intent(context, MqttService::class.java).apply {
+                action = "com.water.von.ACTION_START_BLE_SCAN"
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
+
+        fun stopBleScan(context: Context) {
+            val intent = Intent(context, MqttService::class.java).apply {
+                action = "com.water.von.ACTION_STOP_BLE_SCAN"
+            }
+            context.startService(intent)
+        }
     }
 
     override fun onCreate() {
@@ -176,6 +206,10 @@ class MqttService : Service() {
             if (topic != null) {
                 unsubscribeInternal(topic)
             }
+        } else if (intent?.action == "com.water.von.ACTION_START_BLE_SCAN") {
+            startBleScanInternal()
+        } else if (intent?.action == "com.water.von.ACTION_STOP_BLE_SCAN") {
+            stopBleScanInternal()
         }
 
         return START_STICKY
@@ -558,7 +592,198 @@ class MqttService : Service() {
         }
     }
 
+    private var wakeLock: PowerManager.WakeLock? = null
+    private var bleScanner: BluetoothLeScanner? = null
+    private var bleScanCallback: ScanCallback? = null
+    private val bleDataProcessors = Array(4) { DataProcessor() }
+    private val bleChannelsTriggered = BooleanArray(4) { false }
+    private var bleLastSeqNum = -1
+    private var bleTimeoutJob: Job? = null
+
+    private fun startBleScanInternal() {
+        if (_isBleScanning.value) {
+            addConsoleLog("BLE 后台扫描已在运行中")
+            return
+        }
+
+        val bluetoothManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+        val adapter: BluetoothAdapter? = bluetoothManager.adapter
+        if (adapter == null || !adapter.isEnabled) {
+            addConsoleLog("启动 BLE 扫描失败: 蓝牙未开启或不支持")
+            return
+        }
+
+        val scanner = adapter.bluetoothLeScanner
+        if (scanner == null) {
+            addConsoleLog("启动 BLE 扫描失败: 无法获取 BluetoothLeScanner")
+            return
+        }
+
+        bleScanner = scanner
+        _isBleScanning.value = true
+        addConsoleLog("启动 BLE 后台扫描...")
+
+        // 1. 获取 WakeLock，防止锁屏 CPU 休眠
+        try {
+            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+            if (wakeLock == null) {
+                wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "von:BleScanWakeLock")
+            }
+            wakeLock?.acquire(30 * 60 * 1000L /* 30分钟最大保护 */)
+            addConsoleLog("已获取 PARTIAL_WAKE_LOCK 唤醒锁")
+        } catch (e: Exception) {
+            Log.e(TAG, "获取 WakeLock 失败: ${e.message}")
+        }
+
+        // 2. 初始化防抖及触发状态
+        bleLastSeqNum = -1
+        bleChannelsTriggered.fill(false)
+        for (dp in bleDataProcessors) {
+            dp.reset()
+        }
+
+        // 3. 启动 15 分钟无数据超时定时器
+        resetBleTimeoutTimer()
+
+        // 4. 构建 ScanFilter (锁屏后台扫描必须指定过滤条件，否则被系统拦截)
+        val filter = ScanFilter.Builder()
+            .setManufacturerData(0xFFFF, byteArrayOf(), byteArrayOf()) // 过滤指定厂商 ID 0xFFFF
+            .build()
+
+        val settings = ScanSettings.Builder()
+            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
+            .build()
+
+        bleScanCallback = object : ScanCallback() {
+            override fun onScanResult(callbackType: Int, result: ScanResult?) {
+                super.onScanResult(callbackType, result)
+                result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
+                    if (data.size >= 8) {
+                        val ch0 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
+                        val ch1 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
+                        val ch2 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+                        val ch3 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
+                        
+                        val seqNum = if (data.size > 8) data[8].toInt() and 0xFF else -1
+                        if (seqNum == -1 || seqNum != bleLastSeqNum) {
+                            bleLastSeqNum = seqNum
+                            
+                            // 重置 15 分钟无数据超时定时器
+                            resetBleTimeoutTimer()
+
+                            // 更新全局 Flow 让 UI 实时消费
+                            _latestSensorRawData.value = intArrayOf(ch0, ch1, ch2, ch3)
+
+                            // 后台逻辑处理：滤波、基准值计算、触发告警/恢复记录
+                            val physicalChannels = arrayOf(ch3, ch2, ch1, ch0)
+                            for (i in 0 until 4) {
+                                val rawValue = physicalChannels[i]
+                                val filteredValue = bleDataProcessors[i].pushRaw(rawValue)
+                                val baseline = bleDataProcessors[i].pushBaseline(filteredValue)
+                                val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
+
+                                // 阈值触发判断：filteredValue < threshold 表示触发 (即有水/接触液体)
+                                val isTriggeredNow = filteredValue < threshold
+                                val wasTriggered = bleChannelsTriggered[i]
+
+                                if (isTriggeredNow && !wasTriggered) {
+                                    bleChannelsTriggered[i] = true
+                                    val uiChannelNum = 4 - i
+                                    val message = "传感器通道 Ch$uiChannelNum 触发告警：检测到液体 (当前值: $filteredValue, 阈值: $threshold)"
+                                    
+                                    // 写入 LogManager 本地归档 (Channel 对应 1..4)
+                                    logManager.writeLog(
+                                        channel = uiChannelNum,
+                                        level = "WARN",
+                                        message = message,
+                                        imagePath = ""
+                                    )
+                                    // 发送横幅报警通知
+                                    showAlarmNotification("通道 $uiChannelNum 传感器报警", message)
+                                    addConsoleLog("BLE告警: $message")
+                                } else if (!isTriggeredNow && wasTriggered) {
+                                    bleChannelsTriggered[i] = false
+                                    val uiChannelNum = 4 - i
+                                    val message = "传感器通道 Ch$uiChannelNum 恢复正常：液体消失 (当前值: $filteredValue, 阈值: $threshold)"
+                                    
+                                    logManager.writeLog(
+                                        channel = uiChannelNum,
+                                        level = "INFO",
+                                        message = message,
+                                        imagePath = ""
+                                    )
+                                    addConsoleLog("BLE恢复: $message")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            override fun onScanFailed(errorCode: Int) {
+                super.onScanFailed(errorCode)
+                addConsoleLog("BLE 后台扫描失败, 错误码: $errorCode")
+            }
+        }
+
+        try {
+            bleScanner?.startScan(listOf(filter), settings, bleScanCallback)
+            addConsoleLog("已开始 BLE 后台过滤扫描 (ManufacturerData=0xFFFF)")
+        } catch (e: SecurityException) {
+            addConsoleLog("启动 BLE 扫描失败: 权限不足 SecurityException")
+            stopBleScanInternal()
+        } catch (e: Exception) {
+            addConsoleLog("启动 BLE 扫描失败: ${e.message}")
+            stopBleScanInternal()
+        }
+    }
+
+    private fun stopBleScanInternal() {
+        if (!_isBleScanning.value) return
+        _isBleScanning.value = false
+        addConsoleLog("停止 BLE 后台扫描...")
+
+        // 1. 停止蓝牙扫描
+        try {
+            if (bleScanner != null && bleScanCallback != null) {
+                bleScanner?.stopScan(bleScanCallback)
+                addConsoleLog("已停止 BLE 扫描器")
+            }
+        } catch (e: SecurityException) {
+            Log.e(TAG, "停止扫描失败: 权限不足 SecurityException")
+        } catch (e: Exception) {
+            Log.e(TAG, "停止扫描失败: ${e.message}")
+        }
+        bleScanCallback = null
+        bleScanner = null
+
+        // 2. 取消超时任务
+        bleTimeoutJob?.cancel()
+        bleTimeoutJob = null
+
+        // 3. 释放 WakeLock
+        try {
+            if (wakeLock?.isHeld == true) {
+                wakeLock?.release()
+                addConsoleLog("已释放 WakeLock 唤醒锁")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "释放 WakeLock 失败: ${e.message}")
+        }
+        wakeLock = null
+    }
+
+    private fun resetBleTimeoutTimer() {
+        bleTimeoutJob?.cancel()
+        bleTimeoutJob = serviceScope.launch {
+            kotlinx.coroutines.delay(15 * 60 * 1000L) // 15 分钟
+            addConsoleLog("触发 15 分钟无 BLE 数据超时保护，自动关闭扫描")
+            stopBleScanInternal()
+        }
+    }
+
     override fun onDestroy() {
+        stopBleScanInternal()
         shouldReconnect = false
         reconnectJob?.cancel()
         disconnectMqtt()

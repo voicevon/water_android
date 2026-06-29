@@ -52,6 +52,7 @@ fun SensorDebugScreen(
     var debugMode by remember { mutableStateOf("BLE") } // "BLE" or "MQTT"
     var isMqttStarted by remember { mutableStateOf(false) }
     val isMqttConnected by MqttService.isConnected.collectAsState()
+    val isBleScanning by MqttService.isBleScanning.collectAsState()
     
     var prefixName by remember { mutableStateOf("dongzhan") }
     
@@ -124,8 +125,17 @@ fun SensorDebugScreen(
         }
     }
 
-    LaunchedEffect(isMqttStarted, prefixName) {
-        if (isMqttStarted && debugMode == "MQTT") {
+    // 前台防休眠机制
+    val activity = context as? android.app.Activity
+    DisposableEffect(Unit) {
+        activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        onDispose {
+            activity?.window?.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        }
+    }
+
+    LaunchedEffect(debugMode, isMqttStarted, prefixName) {
+        if (debugMode == "BLE" || (isMqttStarted && debugMode == "MQTT")) {
             packetCount = 0
             lastSeqNum = -1
             for (i in 0 until 4) {
@@ -133,10 +143,12 @@ fun SensorDebugScreen(
             }
             latestPoint = SensorDataPoint(0, 0, 0, 0)
             
-            MqttService.activeSensorPrefix = prefixName
-            Toast.makeText(context, "开始 MQTT 调试: $prefixName", Toast.LENGTH_SHORT).show()
-            MqttService.subscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
-            MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, prefixName)
+            if (debugMode == "MQTT") {
+                MqttService.activeSensorPrefix = prefixName
+                Toast.makeText(context, "开始 MQTT 调试: $prefixName", Toast.LENGTH_SHORT).show()
+                MqttService.subscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+                MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, prefixName)
+            }
             
             try {
                 MqttService.latestSensorRawData.collect { data ->
@@ -170,100 +182,29 @@ fun SensorDebugScreen(
                     }
                 }
             } finally {
-                // 当调试结束或配置改变时，自动发送 stop 命令并取消订阅旧的 topic
-                MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
-                MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
-                MqttService.activeSensorPrefix = null
+                if (debugMode == "MQTT") {
+                    // 当调试结束或配置改变时，自动发送 stop 命令并取消订阅旧的 topic
+                    MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
+                    MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+                    MqttService.activeSensorPrefix = null
+                }
             }
         }
     }
 
-    val mainHandler = remember { android.os.Handler(android.os.Looper.getMainLooper()) }
-
     DisposableEffect(hasPermissions, debugMode) {
-        var scanner: BluetoothLeScanner? = null
-        var scanCallback: ScanCallback? = null
-
-        if (hasPermissions && debugMode == "BLE") {
-            val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-            val adapter: BluetoothAdapter? = bluetoothManager.adapter
-            
-            if (adapter != null && adapter.isEnabled) {
-                scanner = adapter.bluetoothLeScanner
-                if (scanner != null) {
-                    val filter = ScanFilter.Builder()
-                        // 移除 manufacturer data 过滤，避免部分安卓系统强校验长度导致静默丢弃
-                        .build()
-
-                    val settings = ScanSettings.Builder()
-                        .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-                        .build()
-
-                    scanCallback = object : ScanCallback() {
-                        override fun onScanResult(callbackType: Int, result: ScanResult?) {
-                            super.onScanResult(callbackType, result)
-                            result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
-                                mainHandler.post {
-                                    if (data.size >= 8) {
-                                        val ch0 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
-                                        val ch1 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
-                                        val ch2 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
-                                        val ch3 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
-                                        
-                                        // 使用序列号 (seq_num) 来判断去重，抛弃相同的数据包
-                                        val seqNum = if (data.size > 8) data[8].toInt() and 0xFF else -1
-                                        
-                                        if (seqNum == -1 || seqNum != lastSeqNum) {
-                                            lastSeqNum = seqNum
-                                            packetCount++
-                                            
-                                            // UI左起 Ch4(对应物理ch3), Ch3(物理ch2), Ch2(物理ch1), Ch1(物理ch0)
-                                            val physicalChannels = arrayOf(ch3, ch2, ch1, ch0) 
-                                            
-                                            for (i in 0 until 4) {
-                                                val rawValue = physicalChannels[i]
-                                                val filteredValue = dataProcessors[i].pushRaw(rawValue)
-                                                val baseline = dataProcessors[i].pushBaseline(filteredValue)
-                                                val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
-                                                
-                                                val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
-                                                
-                                                dataPointsAll[i].add(newPoint)
-                                                if (dataPointsAll[i].size > maxPoints) {
-                                                    dataPointsAll[i].removeAt(0)
-                                                }
-                                                
-                                                if (i == selectedChannel) {
-                                                    latestPoint = newPoint
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    try {
-                        scanner.startScan(listOf(filter), settings, scanCallback)
-                        Log.d("SensorDebug", "Started BLE Scan")
-                    } catch (e: SecurityException) {
-                        Log.e("SensorDebug", "Permission denied for startScan", e)
-                    }
-                }
-            }
+        val modeOnStart = debugMode
+        if (hasPermissions && modeOnStart == "BLE") {
+            MqttService.startBleScan(context)
+            Log.d("SensorDebug", "Sent start BLE Scan Intent to service")
         }
 
         onDispose {
-            try {
-                if (scanner != null && scanCallback != null && hasPermissions) {
-                    scanner.stopScan(scanCallback)
-                    Log.d("SensorDebug", "Stopped BLE Scan")
-                }
-            } catch (e: SecurityException) {
-                Log.e("SensorDebug", "Permission denied for stopScan", e)
+            if (modeOnStart == "BLE") {
+                MqttService.stopBleScan(context)
+                Log.d("SensorDebug", "Sent stop BLE Scan Intent to service")
             }
-            if (debugMode == "MQTT" && isMqttStarted) {
+            if (modeOnStart == "MQTT" && isMqttStarted) {
                 MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
                 MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
                 MqttService.activeSensorPrefix = null
@@ -353,6 +294,23 @@ fun SensorDebugScreen(
                                     )
                                 }
                             } else {
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(8.dp)
+                                            .background(
+                                                color = if (isBleScanning) Color(0xFF4CAF50) else Color.Gray,
+                                                shape = androidx.compose.foundation.shape.CircleShape
+                                            )
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Text(
+                                        text = if (isBleScanning) "BLE 接收中 (后台运行)" else "BLE 已停止",
+                                        fontSize = 12.sp,
+                                        color = if (isBleScanning) Color(0xFF4CAF50) else Color.Gray,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                             Text(
