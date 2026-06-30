@@ -10,7 +10,7 @@ import kotlinx.coroutines.flow.asSharedFlow
  * 替代原有的 context.startForegroundService(Intent) 传参机制
  */
 sealed class MqttCommand {
-    data class Publish(val topic: String, val payload: String) : MqttCommand()
+    data class Publish(val topic: String, val payload: String, val qos: Int = 1) : MqttCommand()
     data class Subscribe(val topic: String) : MqttCommand()
     data class Unsubscribe(val topic: String) : MqttCommand()
     object Reconnect : MqttCommand()

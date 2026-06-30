@@ -50,24 +50,46 @@ fun SensorDebugScreen(
     val context = LocalContext.current
     var hasPermissions by remember { mutableStateOf(false) }
     var debugMode by remember { mutableStateOf("BLE") } // "BLE" or "MQTT"
-    var isMqttStarted by remember { mutableStateOf(false) }
+    
+    val isMqttStarted by MqttService.isMqttDebuggingActive.collectAsState()
     val isMqttConnected by MqttService.isConnected.collectAsState()
     val isBleScanning by MqttService.isBleScanning.collectAsState()
     
     var prefixName by remember { mutableStateOf("dongzhan") }
     
-    val dataPointsAll = remember { Array(4) { mutableStateListOf<SensorDataPoint>() } }
-    var latestPoint by remember { mutableStateOf(SensorDataPoint(0, 0, 0, 0)) }
-    var packetCount by remember { mutableStateOf(0) }
+    // BLE 模式的局部数据状态
+    val dataPointsBle = remember { Array(4) { mutableStateListOf<SensorDataPoint>() } }
+    var latestPointBle by remember { mutableStateOf(SensorDataPoint(0, 0, 0, 0)) }
+    var packetCountBle by remember { mutableStateOf(0) }
+    val dataProcessorsBle = remember { Array(4) { DataProcessor() } }
+    
+    // MQTT 模式的全局数据状态绑定
+    val packetCountMqtt by MqttService.debugPacketCount.collectAsState()
     
     var selectedChannel by remember { mutableStateOf(0) }
-    val dataProcessors = remember { Array(4) { DataProcessor() } }
-    var lastSeqNum by remember { mutableStateOf(-1) }
     
     val configuration = LocalConfiguration.current
     val density = LocalDensity.current.density
     val maxPoints = remember(configuration.screenWidthDp, density) {
         (configuration.screenWidthDp * density).toInt().coerceAtLeast(100)
+    }
+
+    val latestPoint = if (debugMode == "MQTT") {
+        MqttService.debugDataPoints[selectedChannel].lastOrNull() ?: SensorDataPoint(0, 0, 0, 0)
+    } else {
+        latestPointBle
+    }
+
+    val currentPoints = if (debugMode == "MQTT") {
+        MqttService.debugDataPoints[selectedChannel]
+    } else {
+        dataPointsBle[selectedChannel]
+    }
+
+    val rxCount = if (debugMode == "MQTT") {
+        packetCountMqtt
+    } else {
+        packetCountBle
     }
 
     val sp = remember { context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE) }
@@ -113,15 +135,12 @@ fun SensorDebugScreen(
     }
 
     LaunchedEffect(debugMode) {
-        packetCount = 0
-        lastSeqNum = -1
-        for (i in 0 until 4) {
-            dataPointsAll[i].clear()
-        }
-        latestPoint = SensorDataPoint(0, 0, 0, 0)
-        
-        if (debugMode != "MQTT" && isMqttStarted) {
-            isMqttStarted = false
+        if (debugMode == "BLE") {
+            packetCountBle = 0
+            for (i in 0 until 4) {
+                dataPointsBle[i].clear()
+            }
+            latestPointBle = SensorDataPoint(0, 0, 0, 0)
         }
     }
 
@@ -134,60 +153,51 @@ fun SensorDebugScreen(
         }
     }
 
-    LaunchedEffect(debugMode, isMqttStarted, prefixName) {
-        if (debugMode == "BLE" || (isMqttStarted && debugMode == "MQTT")) {
-            packetCount = 0
-            lastSeqNum = -1
-            for (i in 0 until 4) {
-                dataPointsAll[i].clear()
+    // 绑定离开和重新打开调试界面时的超时自动关闭定时器生命周期
+    DisposableEffect(Unit) {
+        MqttService.cancelAutoStopTimer()
+        onDispose {
+            if (MqttService.isMqttDebuggingActive.value) {
+                MqttService.scheduleAutoStopTimer(context)
             }
-            latestPoint = SensorDataPoint(0, 0, 0, 0)
-            
-            if (debugMode == "MQTT") {
-                MqttService.activeSensorPrefix = prefixName
-                Toast.makeText(context, "开始 MQTT 调试: $prefixName", Toast.LENGTH_SHORT).show()
-                MqttService.subscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
-                MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, prefixName)
-            }
-            
+        }
+    }
+
+    // 独立处理 BLE 数据收集
+    LaunchedEffect(debugMode) {
+        if (debugMode == "BLE") {
             try {
                 MqttService.latestSensorRawData.collect { data ->
                     if (data != null && data.size >= 4) {
-                        packetCount++
+                        packetCountBle++
                         val ch0 = data[0]
                         val ch1 = data[1]
                         val ch2 = data[2]
                         val ch3 = data[3]
                         
-                        // UI左起 Ch4(对应物理ch3), Ch3(物理ch2), Ch2(物理ch1), Ch1(物理ch0)
                         val physicalChannels = arrayOf(ch3, ch2, ch1, ch0)
                         
                         for (i in 0 until 4) {
                             val rawValue = physicalChannels[i]
-                            val filteredValue = dataProcessors[i].pushRaw(rawValue)
-                            val baseline = dataProcessors[i].pushBaseline(filteredValue)
+                            val filteredValue = dataProcessorsBle[i].pushRaw(rawValue)
+                            val baseline = dataProcessorsBle[i].pushBaseline(filteredValue)
                             val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
                             
                             val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
                             
-                            dataPointsAll[i].add(newPoint)
-                            if (dataPointsAll[i].size > maxPoints) {
-                                dataPointsAll[i].removeAt(0)
+                            dataPointsBle[i].add(newPoint)
+                            if (dataPointsBle[i].size > maxPoints) {
+                                dataPointsBle[i].removeAt(0)
                             }
                             
                             if (i == selectedChannel) {
-                                latestPoint = newPoint
+                                latestPointBle = newPoint
                             }
                         }
                     }
                 }
-            } finally {
-                if (debugMode == "MQTT") {
-                    // 当调试结束或配置改变时，自动发送 stop 命令并取消订阅旧的 topic
-                    MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
-                    MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
-                    MqttService.activeSensorPrefix = null
-                }
+            } catch (e: Exception) {
+                Log.e("SensorDebug", "Failed to collect BLE data", e)
             }
         }
     }
@@ -203,11 +213,6 @@ fun SensorDebugScreen(
             if (modeOnStart == "BLE") {
                 MqttService.stopBleScan(context)
                 Log.d("SensorDebug", "Sent stop BLE Scan Intent to service")
-            }
-            if (modeOnStart == "MQTT" && isMqttStarted) {
-                MqttService.publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop")
-                MqttService.unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
-                MqttService.activeSensorPrefix = null
             }
         }
     }
@@ -314,7 +319,7 @@ fun SensorDebugScreen(
                                 Spacer(modifier = Modifier.weight(1f))
                             }
                             Text(
-                                text = "RX: $packetCount",
+                                text = "RX: $rxCount",
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.primary,
                                 fontWeight = FontWeight.Medium
@@ -324,12 +329,13 @@ fun SensorDebugScreen(
                         if (debugMode == "MQTT") {
                             Button(
                                 onClick = { 
-                                    // 每次开始调试前，重新从全局配置加载最新的设备英文名称，确保立即生效
                                     if (!isMqttStarted) {
                                         val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
                                         prefixName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
+                                        MqttService.startMqttDebugging(context, prefixName)
+                                    } else {
+                                        MqttService.stopMqttDebugging(context)
                                     }
-                                    isMqttStarted = !isMqttStarted 
                                 },
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp),
                                 colors = ButtonDefaults.buttonColors(
@@ -348,13 +354,22 @@ fun SensorDebugScreen(
                             horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
                             listOf("Ch4", "Ch3", "Ch2", "Ch1").forEachIndexed { index, name ->
+                                val isWaterDetected = if (debugMode == "MQTT") {
+                                    MqttService.debugDataPoints[index].lastOrNull()?.hasWater == true
+                                } else {
+                                    dataPointsBle[index].lastOrNull()?.hasWater == true
+                                }
+                                val dotColor = if (isWaterDetected) Color.Red else Color(0xFF4CAF50)
+
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     RadioButton(
                                         selected = selectedChannel == index,
                                         onClick = { 
                                             selectedChannel = index
                                             // 切换通道时直接从当前通道最新的数据点更新面板
-                                            latestPoint = dataPointsAll[index].lastOrNull() ?: SensorDataPoint(0, 0, 0, 0)
+                                            if (debugMode != "MQTT") {
+                                                latestPointBle = dataPointsBle[index].lastOrNull() ?: SensorDataPoint(0, 0, 0, 0)
+                                            }
                                         },
                                         modifier = Modifier.padding(end = 0.dp).size(24.dp)
                                     )
@@ -364,8 +379,38 @@ fun SensorDebugScreen(
                                         fontSize = 12.sp,
                                         modifier = Modifier.padding(start = 4.dp)
                                     )
+                                    Spacer(modifier = Modifier.width(4.dp))
+                                    Box(
+                                        modifier = Modifier
+                                            .size(6.dp)
+                                            .background(dotColor, shape = androidx.compose.foundation.shape.CircleShape)
+                                    )
                                 }
                             }
+                        }
+
+                        // 实时水状态显示区
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.Center,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            val stateColor = if (latestPoint.hasWater) Color.Red else Color(0xFF4CAF50)
+                            val stateLabel = if (latestPoint.hasWater) "检测到液体 (有水)" else "干燥正常 (无水)"
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .background(stateColor, shape = androidx.compose.foundation.shape.CircleShape)
+                            )
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Text(
+                                text = stateLabel,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = stateColor
+                            )
                         }
 
                         Card(
@@ -401,11 +446,11 @@ fun SensorDebugScreen(
                                 .padding(bottom = 16.dp)
                                 .background(Color.White)
                         ) {
-                            if (dataPointsAll[selectedChannel].isEmpty()) {
+                            if (currentPoints.isEmpty()) {
                                 Text("等待数据传入...", modifier = Modifier.align(Alignment.Center))
                             } else {
                                 MultiLineChart(
-                                    dataPoints = dataPointsAll[selectedChannel],
+                                    dataPoints = currentPoints,
                                     modifier = Modifier.fillMaxSize()
                                 )
                             }

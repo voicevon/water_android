@@ -40,6 +40,9 @@ import kotlinx.coroutines.withContext
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
 import java.util.UUID
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.snapshots.SnapshotStateList
+import com.water.von.ui.components.SensorDataPoint
 
 /**
  * 污水采样监控前台常驻网络连接服务
@@ -65,6 +68,9 @@ class MqttService : Service() {
     private var reconnectJob: Job? = null
 
     companion object {
+        private val companionJob = SupervisorJob()
+        private val companionScope = CoroutineScope(Dispatchers.IO + companionJob)
+
         // 使用 Flow 向前台 UI 实时暴露通信状态（私有可变，公有只读）
         private val _isConnected = MutableStateFlow(false)
         val isConnected: StateFlow<Boolean> = _isConnected.asStateFlow()
@@ -107,14 +113,67 @@ class MqttService : Service() {
             _stationEnglishName.value = name
         }
 
+        private val _isMqttDebuggingActive = MutableStateFlow(false)
+        val isMqttDebuggingActive: StateFlow<Boolean> = _isMqttDebuggingActive.asStateFlow()
+
+        private val _debugPacketCount = MutableStateFlow(0)
+        val debugPacketCount: StateFlow<Int> = _debugPacketCount.asStateFlow()
+
+        val debugDataPoints = Array(4) { mutableStateListOf<SensorDataPoint>() }
+        
+        val channels = Array(4) { id -> com.water.von.data.SensorChannel(id + 1, thresholdOffset = 50) }
+
+        @Volatile
+        private var autoStopJob: Job? = null
+
         @Volatile
         var activeSensorPrefix: String? = null
+
+        fun startMqttDebugging(context: Context, prefix: String) {
+            activeSensorPrefix = prefix
+            _debugPacketCount.value = 0
+            for (i in 0 until 4) {
+                debugDataPoints[i].clear()
+                channels[i].reset()
+            }
+            _isMqttDebuggingActive.value = true
+            
+            subscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+            publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, prefix, qos = 2)
+            
+            cancelAutoStopTimer()
+        }
+
+        fun stopMqttDebugging(context: Context) {
+            if (!_isMqttDebuggingActive.value) return
+            _isMqttDebuggingActive.value = false
+            
+            publish(context, MqttTopics.SENSOR_CONTROL_TOPIC, "stop", qos = 2)
+            unsubscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+            activeSensorPrefix = null
+            
+            cancelAutoStopTimer()
+        }
+
+        fun scheduleAutoStopTimer(context: Context) {
+            cancelAutoStopTimer()
+            autoStopJob = companionScope.launch {
+                kotlinx.coroutines.delay(15 * 60 * 1000L) // 15分钟
+                stopMqttDebugging(context)
+                Log.i("MqttService", "MQTT 调试已因页面离开 15 分钟超时自动停止")
+            }
+        }
+
+        fun cancelAutoStopTimer() {
+            autoStopJob?.cancel()
+            autoStopJob = null
+        }
 
         /**
          * 向指定主题发布消息
          */
-        fun publish(context: Context, topic: String, payload: String) {
-            MqttBus.sendCommand(MqttCommand.Publish(topic, payload))
+        fun publish(context: Context, topic: String, payload: String, qos: Int = 1) {
+            MqttBus.sendCommand(MqttCommand.Publish(topic, payload, qos))
         }
 
         /**
@@ -169,7 +228,7 @@ class MqttService : Service() {
         serviceScope.launch {
             MqttBus.commands.collect { cmd ->
                 when (cmd) {
-                    is MqttCommand.Publish -> publishInternal(cmd.topic, cmd.payload)
+                    is MqttCommand.Publish -> publishInternal(cmd.topic, cmd.payload, cmd.qos)
                     is MqttCommand.Subscribe -> subscribeInternal(cmd.topic)
                     is MqttCommand.Unsubscribe -> unsubscribeInternal(cmd.topic)
                     is MqttCommand.Reconnect -> {
@@ -215,15 +274,15 @@ class MqttService : Service() {
         return START_STICKY
     }
 
-    private fun publishInternal(topic: String, payload: String) {
+    private fun publishInternal(topic: String, payload: String, qos: Int = 1) {
         if (mqttClient?.isConnected == true) {
             try {
                 val message = MqttMessage(payload.toByteArray(Charsets.UTF_8))
-                message.qos = 1
+                message.qos = qos
                 message.isRetained = false
                 mqttClient?.publish(topic, message)
                 // publish() 是异步的，消息已加入 Paho 内部队列，等待 deliveryComplete 回调确认 Broker 已收到
-                addConsoleLog("消息已加入发送队列 -> 主题: $topic, 内容: $payload")
+                addConsoleLog("消息已加入发送队列 -> 主题: $topic, QoS: $qos, 内容: $payload")
             } catch (e: MqttException) {
                 // MqttException 包含 Paho 错误码，比如 reasonCode=32104 表示连接丢失
                 addConsoleLog("发布消息失败 [MqttException rc=${e.reasonCode}]: ${e.message}")
@@ -454,7 +513,34 @@ class MqttService : Service() {
                         val ch2 = json.optInt("ch2", 0)
                         val ch3 = json.optInt("ch3", 0)
                         val ch4 = json.optInt("ch4", 0)
+                        
                         _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4)
+                        
+                        if (_isMqttDebuggingActive.value) {
+                            _debugPacketCount.value++
+                            val physicalChannels = arrayOf(ch4, ch3, ch2, ch1)
+                            
+                            for (i in 0 until 4) {
+                                val rawValue = physicalChannels[i]
+                                val state = channels[i].pushRaw(rawValue)
+                                val hasWater = state == com.water.von.data.SensorState.HAS_WATER
+                                
+                                val newPoint = SensorDataPoint(
+                                    ch0 = rawValue,
+                                    ch1 = channels[i].filteredValue,
+                                    ch2 = channels[i].baseline,
+                                    ch3 = channels[i].threshold,
+                                    hasWater = hasWater
+                                )
+                                
+                                synchronized(debugDataPoints[i]) {
+                                    if (debugDataPoints[i].size >= 1000) {
+                                        debugDataPoints[i].removeAt(0)
+                                    }
+                                    debugDataPoints[i].add(newPoint)
+                                }
+                            }
+                        }
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse sensor status data: ${e.message}", e)
@@ -788,6 +874,7 @@ class MqttService : Service() {
         reconnectJob?.cancel()
         disconnectMqtt()
         serviceJob.cancel()
+        companionJob.cancel()
         isServiceRunning = false
         addConsoleLog("MqttService 已销毁")
         super.onDestroy()

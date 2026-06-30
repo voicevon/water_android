@@ -19,7 +19,8 @@ data class SensorDataPoint(
     val ch0: Int,
     val ch1: Int,
     val ch2: Int,
-    val ch3: Int
+    val ch3: Int,
+    val hasWater: Boolean = false
 )
 
 @Composable
@@ -31,20 +32,15 @@ fun MultiLineChart(
         return
     }
 
-    // Determine min and max for Y-axis scaling
-    var minY = Int.MAX_VALUE
-    var maxY = Int.MIN_VALUE
-
+    // Determine max for Y-axis scaling, min is kept at 0
+    var maxY = 0
     for (point in dataPoints) {
-        minY = min(minY, min(point.ch0, min(point.ch1, min(point.ch2, point.ch3))))
         maxY = max(maxY, max(point.ch0, max(point.ch1, max(point.ch2, point.ch3))))
     }
 
-    // Add some padding to Y-axis
-    val range = max(10, maxY - minY)
-    val yMax = maxY + (range * 0.1f)
-    val yMin = max(0f, minY - (range * 0.1f))
-    val yRange = max(1f, yMax - yMin)
+    val yMin = 0f
+    val yMax = max(10f, maxY * 1.1f)
+    val yRange = yMax - yMin
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val width = size.width

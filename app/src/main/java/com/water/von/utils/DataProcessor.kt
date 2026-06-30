@@ -4,7 +4,7 @@ class DataProcessor {
     companion object {
         const val MA_WINDOW = 50
         const val BASELINE_WINDOW = 200
-        const val THRESHOLD_OFFSET = 5000
+        const val THRESHOLD_OFFSET = 50
     }
 
     private val maBuf = IntArray(MA_WINDOW)
