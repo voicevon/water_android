@@ -46,6 +46,10 @@ import kotlinx.coroutines.delay
  */
 class MainActivity : ComponentActivity() {
 
+    companion object {
+        var showSensorDebugOnLaunch by mutableStateOf(false)
+    }
+
     // 声明运行时权限申请回调 (Android 13+ 通知权限)
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
@@ -59,6 +63,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIntent(intent)
         enableEdgeToEdge()
 
         // 1. 检查并申请通知权限 (Android 13+)
@@ -88,6 +93,17 @@ class MainActivity : ComponentActivity() {
                     }
                 }
             }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.getBooleanExtra("open_sensor_debug", false) == true) {
+            showSensorDebugOnLaunch = true
         }
     }
 

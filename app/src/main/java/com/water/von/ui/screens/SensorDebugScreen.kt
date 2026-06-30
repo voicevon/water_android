@@ -3,6 +3,7 @@ package com.water.von.ui.screens
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalDensity
 import android.Manifest
+import android.content.pm.ActivityInfo
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.bluetooth.le.BluetoothLeScanner
@@ -74,14 +75,23 @@ fun SensorDebugScreen(
         (configuration.screenWidthDp * density).toInt().coerceAtLeast(100)
     }
 
+    // 以 collectAsState 响应式订阅 debugDataPoints (MutableStateFlow)
+    val mqttDataCh0 by MqttService.debugDataPoints[0].collectAsState()
+    val mqttDataCh1 by MqttService.debugDataPoints[1].collectAsState()
+    val mqttDataCh2 by MqttService.debugDataPoints[2].collectAsState()
+    val mqttDataCh3 by MqttService.debugDataPoints[3].collectAsState()
+    val mqttDataAll = remember(mqttDataCh0, mqttDataCh1, mqttDataCh2, mqttDataCh3) {
+        arrayOf(mqttDataCh0, mqttDataCh1, mqttDataCh2, mqttDataCh3)
+    }
+
     val latestPoint = if (debugMode == "MQTT") {
-        MqttService.debugDataPoints[selectedChannel].lastOrNull() ?: SensorDataPoint(0, 0, 0, 0)
+        mqttDataAll[selectedChannel].lastOrNull() ?: SensorDataPoint(0, 0, 0, 0)
     } else {
         latestPointBle
     }
 
     val currentPoints = if (debugMode == "MQTT") {
-        MqttService.debugDataPoints[selectedChannel]
+        mqttDataAll[selectedChannel]
     } else {
         dataPointsBle[selectedChannel]
     }
@@ -146,6 +156,14 @@ fun SensorDebugScreen(
 
     // 前台防休眠机制
     val activity = context as? android.app.Activity
+    DisposableEffect(activity) {
+        val originalOrientation = activity?.requestedOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onDispose {
+            activity?.requestedOrientation = originalOrientation
+        }
+    }
+
     DisposableEffect(Unit) {
         activity?.window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         onDispose {
@@ -153,15 +171,7 @@ fun SensorDebugScreen(
         }
     }
 
-    // 绑定离开和重新打开调试界面时的超时自动关闭定时器生命周期
-    DisposableEffect(Unit) {
-        MqttService.cancelAutoStopTimer()
-        onDispose {
-            if (MqttService.isMqttDebuggingActive.value) {
-                MqttService.scheduleAutoStopTimer(context)
-            }
-        }
-    }
+
 
     // 独立处理 BLE 数据收集
     LaunchedEffect(debugMode) {
@@ -255,12 +265,12 @@ fun SensorDebugScreen(
                     Tab(
                         selected = debugMode == "BLE",
                         onClick = { debugMode = "BLE" },
-                        text = { Text("BLE\n广播", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
+                        text = { Text("BLE", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
                     )
                     Tab(
                         selected = debugMode == "MQTT",
                         onClick = { debugMode = "MQTT" },
-                        text = { Text("MQTT\n网络", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
+                        text = { Text("MQTT", fontWeight = FontWeight.Bold, textAlign = TextAlign.Center) }
                     )
                 }
 
@@ -274,57 +284,7 @@ fun SensorDebugScreen(
                             .fillMaxSize()
                             .padding(16.dp)
                     ) {
-                        // Real-time Dashboard
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(bottom = 4.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (debugMode == "MQTT") {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .background(
-                                                color = if (isMqttConnected) Color(0xFF4CAF50) else Color.Red,
-                                                shape = androidx.compose.foundation.shape.CircleShape
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isMqttConnected) "MQTT 已连接" else "MQTT 已断开",
-                                        fontSize = 12.sp,
-                                        color = if (isMqttConnected) Color(0xFF4CAF50) else Color.Red,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            } else {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(8.dp)
-                                            .background(
-                                                color = if (isBleScanning) Color(0xFF4CAF50) else Color.Gray,
-                                                shape = androidx.compose.foundation.shape.CircleShape
-                                            )
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = if (isBleScanning) "BLE 接收中 (后台运行)" else "BLE 已停止",
-                                        fontSize = 12.sp,
-                                        color = if (isBleScanning) Color(0xFF4CAF50) else Color.Gray,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                                Spacer(modifier = Modifier.weight(1f))
-                            }
-                            Text(
-                                text = "RX: $rxCount",
-                                fontSize = 12.sp,
-                                color = MaterialTheme.colorScheme.primary,
-                                fontWeight = FontWeight.Medium
-                            )
-                        }
+
 
                         if (debugMode == "MQTT") {
                             Button(
@@ -353,9 +313,9 @@ fun SensorDebugScreen(
                                 .padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
-                            listOf("Ch4", "Ch3", "Ch2", "Ch1").forEachIndexed { index, name ->
+                            listOf("#4", "#3", "#2", "#1").forEachIndexed { index, name ->
                                 val isWaterDetected = if (debugMode == "MQTT") {
-                                    MqttService.debugDataPoints[index].lastOrNull()?.hasWater == true
+                                    mqttDataAll[index].lastOrNull()?.hasWater == true
                                 } else {
                                     dataPointsBle[index].lastOrNull()?.hasWater == true
                                 }
@@ -377,40 +337,22 @@ fun SensorDebugScreen(
                                         name, 
                                         fontWeight = if (selectedChannel == index) FontWeight.Bold else FontWeight.Normal,
                                         fontSize = 12.sp,
+                                        color = dotColor,
                                         modifier = Modifier.padding(start = 4.dp)
-                                    )
-                                    Spacer(modifier = Modifier.width(4.dp))
-                                    Box(
-                                        modifier = Modifier
-                                            .size(6.dp)
-                                            .background(dotColor, shape = androidx.compose.foundation.shape.CircleShape)
                                     )
                                 }
                             }
                         }
 
-                        // 实时水状态显示区
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(bottom = 8.dp),
-                            horizontalArrangement = Arrangement.Center,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            val stateColor = if (latestPoint.hasWater) Color.Red else Color(0xFF4CAF50)
-                            val stateLabel = if (latestPoint.hasWater) "检测到液体 (有水)" else "干燥正常 (无水)"
-                            Box(
-                                modifier = Modifier
-                                    .size(10.dp)
-                                    .background(stateColor, shape = androidx.compose.foundation.shape.CircleShape)
-                            )
-                            Spacer(modifier = Modifier.width(6.dp))
-                            Text(
-                                text = stateLabel,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = stateColor
-                            )
+                        val activeAlarms by MqttService.activeAlarmsState.collectAsState()
+                        if (activeAlarms.isNotEmpty()) {
+                            Button(
+                                onClick = { MqttService.clearAlarms(context) },
+                                colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
+                                modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
+                            ) {
+                                Text("消除警报 (${activeAlarms.sorted().joinToString("，") { "通道$it" }})", fontWeight = FontWeight.Bold)
+                            }
                         }
 
                         Card(
@@ -432,19 +374,54 @@ fun SensorDebugScreen(
                             }
                         }
 
-                        // Historical Chart
-                        Text(
-                            text = "历史曲线 (近 $maxPoints 次)",
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 16.sp,
-                            modifier = Modifier.padding(bottom = 8.dp)
-                        )
+                        // 状态、有效数据量与接收计数器合并为一行
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(bottom = 8.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // 1. 水状态 (无水/有水)
+                            val stateColor = if (latestPoint.hasWater) Color.Red else Color(0xFF4CAF50)
+                            val stateLabel = if (latestPoint.hasWater) "有水" else "无水"
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(stateColor, shape = androidx.compose.foundation.shape.CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = stateLabel,
+                                    fontSize = 12.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = stateColor
+                                )
+                            }
+
+                            // 2. 窗口宽度 / 数据量
+                            Text(
+                                text = "数据: ${currentPoints.size} / $maxPoints",
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Medium,
+                                color = MaterialTheme.colorScheme.onBackground
+                            )
+
+                            // 3. RX 计数器
+                            Text(
+                                text = "RX: $rxCount",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.Medium
+                            )
+                        }
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .weight(1f)
                                 .padding(bottom = 16.dp)
-                                .background(Color.White)
+                                .background(Color.Black)
                         ) {
                             if (currentPoints.isEmpty()) {
                                 Text("等待数据传入...", modifier = Modifier.align(Alignment.Center))

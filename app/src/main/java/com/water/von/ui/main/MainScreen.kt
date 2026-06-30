@@ -16,13 +16,14 @@ import com.water.von.ui.screens.ConfigScreen
 import com.water.von.ui.screens.LogsScreen
 import com.water.von.ui.screens.MonitorScreen
 import com.water.von.ui.screens.SettingsScreen
+import com.water.von.MainActivity
 import com.water.von.ui.screens.SensorDebugScreen
 import com.water.von.ui.screens.NetworkLogsScreen
 import com.water.von.ui.screens.StationSettingsScreen
 
 /**
  * 主容器页面 MainScreen
- * 整合底部导航栏，控制 4 个核心功能页的视图切换
+ * 整合底部导航栏，控制 4 个核心功能页 of 视图切换
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -32,7 +33,13 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var selectedTab by remember { mutableStateOf(0) }
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
-    var showSensorDebugWindow by remember { mutableStateOf(false) }
+    var showSensorDebugWindow by remember { mutableStateOf(MainActivity.showSensorDebugOnLaunch) }
+
+    LaunchedEffect(MainActivity.showSensorDebugOnLaunch) {
+        if (MainActivity.showSensorDebugOnLaunch) {
+            showSensorDebugWindow = true
+        }
+    }
 
     val stationTitle by com.water.von.service.MqttService.stationChineseName.collectAsState()
 
@@ -60,7 +67,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
 
     if (showSensorDebugWindow) {
         SensorDebugScreen(
-            onDismissRequest = { showSensorDebugWindow = false }
+            onDismissRequest = { 
+                showSensorDebugWindow = false 
+                MainActivity.showSensorDebugOnLaunch = false
+            }
         )
     }
 

@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
  * 绑定 MqttService 的实时数据流并暴露给 Compose UI
  */
 class MonitorViewModel(application: Application) : AndroidViewModel(application) {
-    private val sharedPrefs = application.getSharedPreferences("mqtt_config", Context.MODE_PRIVATE)
+    private val sharedPrefs = com.water.von.utils.SecurePrefs.get(application)
     
     val brokerUrlFlow = MutableStateFlow(getBrokerUrl())
 
