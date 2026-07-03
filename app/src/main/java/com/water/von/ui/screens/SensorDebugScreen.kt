@@ -76,12 +76,12 @@ fun SensorDebugScreen(
     }
 
     // 以 collectAsState 响应式订阅 debugDataPoints (MutableStateFlow)
-    val mqttDataCh0 by MqttService.debugDataPoints[0].collectAsState()
-    val mqttDataCh1 by MqttService.debugDataPoints[1].collectAsState()
-    val mqttDataCh2 by MqttService.debugDataPoints[2].collectAsState()
-    val mqttDataCh3 by MqttService.debugDataPoints[3].collectAsState()
-    val mqttDataAll = remember(mqttDataCh0, mqttDataCh1, mqttDataCh2, mqttDataCh3) {
-        arrayOf(mqttDataCh0, mqttDataCh1, mqttDataCh2, mqttDataCh3)
+    val mqttDataSensor1 by MqttService.debugDataPoints[0].collectAsState()
+    val mqttDataSensor2 by MqttService.debugDataPoints[1].collectAsState()
+    val mqttDataSensor3 by MqttService.debugDataPoints[2].collectAsState()
+    val mqttDataSensor4 by MqttService.debugDataPoints[3].collectAsState()
+    val mqttDataAll = remember(mqttDataSensor1, mqttDataSensor2, mqttDataSensor3, mqttDataSensor4) {
+        arrayOf(mqttDataSensor1, mqttDataSensor2, mqttDataSensor3, mqttDataSensor4)
     }
 
     val latestPoint = if (debugMode == "MQTT") {
@@ -351,7 +351,7 @@ fun SensorDebugScreen(
                                 colors = ButtonDefaults.buttonColors(containerColor = Color.Red),
                                 modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp)
                             ) {
-                                Text("消除警报 (${activeAlarms.sorted().joinToString("，") { "通道$it" }})", fontWeight = FontWeight.Bold)
+                                Text("消除警报 (${activeAlarms.sorted().joinToString("，") { "传感器$it" }})", fontWeight = FontWeight.Bold)
                             }
                         }
 

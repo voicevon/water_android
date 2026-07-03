@@ -32,14 +32,25 @@ fun MultiLineChart(
         return
     }
 
-    // Determine max for Y-axis scaling, min is kept at 0
-    var maxY = 0
+    // Determine min and max for Y-axis scaling
+    var maxY = Int.MIN_VALUE
+    var minY = Int.MAX_VALUE
     for (point in dataPoints) {
-        maxY = max(maxY, max(point.ch0, max(point.ch1, max(point.ch2, point.ch3))))
+        val maxVal = max(point.ch0, max(point.ch1, max(point.ch2, point.ch3)))
+        val minVal = min(point.ch0, min(point.ch1, min(point.ch2, point.ch3)))
+        maxY = max(maxY, maxVal)
+        minY = min(minY, minVal)
     }
 
-    val yMin = 0f
-    val yMax = max(10f, maxY * 1.1f)
+    val rawMin = if (minY == Int.MAX_VALUE) 0f else minY.toFloat()
+    val rawMax = if (maxY == Int.MIN_VALUE) 10f else maxY.toFloat()
+    val diff = rawMax - rawMin
+
+    // Add 10% padding to top and bottom to avoid lines touching the edges of the chart area
+    val padding = if (diff > 0f) diff * 0.1f else 10f
+
+    val yMin = max(0f, rawMin - padding)
+    val yMax = rawMax + padding
     val yRange = yMax - yMin
 
     Canvas(modifier = modifier.fillMaxSize()) {

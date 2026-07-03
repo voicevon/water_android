@@ -258,8 +258,8 @@ class MqttService : Service() {
         /**
          * 向指定主题发布消息
          */
-        fun publish(context: Context, topic: String, payload: String, qos: Int = 1) {
-            MqttBus.sendCommand(MqttCommand.Publish(topic, payload, qos))
+        fun publish(context: Context, topic: String, payload: String, qos: Int = 1, retained: Boolean = false) {
+            MqttBus.sendCommand(MqttCommand.Publish(topic, payload, qos, retained))
         }
 
         /**
@@ -314,7 +314,7 @@ class MqttService : Service() {
         serviceScope.launch {
             MqttBus.commands.collect { cmd ->
                 when (cmd) {
-                    is MqttCommand.Publish -> publishInternal(cmd.topic, cmd.payload, cmd.qos)
+                    is MqttCommand.Publish -> publishInternal(cmd.topic, cmd.payload, cmd.qos, cmd.retained)
                     is MqttCommand.Subscribe -> subscribeInternal(cmd.topic)
                     is MqttCommand.Unsubscribe -> unsubscribeInternal(cmd.topic)
                     is MqttCommand.Reconnect -> {
@@ -379,12 +379,12 @@ class MqttService : Service() {
         return START_STICKY
     }
 
-    private fun publishInternal(topic: String, payload: String, qos: Int = 1) {
+    private fun publishInternal(topic: String, payload: String, qos: Int = 1, retained: Boolean = false) {
         if (mqttClient?.isConnected == true) {
             try {
                 val message = MqttMessage(payload.toByteArray(Charsets.UTF_8))
                 message.qos = qos
-                message.isRetained = false
+                message.isRetained = retained
                 mqttClient?.publish(topic, message)
                 // publish() 是异步的，消息已加入 Paho 内部队列，等待 deliveryComplete 回调确认 Broker 已收到
                 addConsoleLog("消息已加入发送队列 -> 主题: $topic, QoS: $qos, 内容: $payload")
@@ -614,10 +614,10 @@ class MqttService : Service() {
                     val json = org.json.JSONObject(jsonStr)
                     val name = json.optString("name", "")
                     if (name.isNotEmpty() && name == activeSensorPrefix) {
-                        val ch1 = json.optInt("ch1", 0)
-                        val ch2 = json.optInt("ch2", 0)
-                        val ch3 = json.optInt("ch3", 0)
-                        val ch4 = json.optInt("ch4", 0)
+                        val ch1 = json.optInt("sensor1", 0)
+                        val ch2 = json.optInt("sensor2", 0)
+                        val ch3 = json.optInt("sensor3", 0)
+                        val ch4 = json.optInt("sensor4", 0)
                         
                         _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4)
                         
@@ -647,9 +647,9 @@ class MqttService : Service() {
                                 // 边沿检测：有水状态报警与 TTS 语音播报
                                 if (state == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
                                     val uiChannelNum = 4 - i
-                                    val message = "传感器通道 Ch$uiChannelNum 触发告警：检测到液体 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
+                                    val message = "传感器 Sensor$uiChannelNum 触发告警：检测到液体 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
                                     logManager.writeLog(channel = uiChannelNum, level = "WARN", message = message, imagePath = "")
-                                    showAlarmNotification("通道 $uiChannelNum 传感器报警", message)
+                                    showAlarmNotification("传感器 $uiChannelNum 报警", message)
                                     triggerAlarm(applicationContext, uiChannelNum)
                                     addConsoleLog("MQTT告警: $message")
                                 }
@@ -866,10 +866,10 @@ class MqttService : Service() {
                 super.onScanResult(callbackType, result)
                 result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
                     if (data.size >= 8) {
-                        val ch0 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
-                        val ch1 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
-                        val ch2 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
-                        val ch3 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
+                        val sensor1 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
+                        val sensor2 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
+                        val sensor3 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+                        val sensor4 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
                         
                         val seqNum = if (data.size > 8) data[8].toInt() and 0xFF else -1
                         if (seqNum == -1 || seqNum != bleLastSeqNum) {
@@ -879,10 +879,10 @@ class MqttService : Service() {
                             resetBleTimeoutTimer()
 
                             // 更新全局 Flow 让 UI 实时消费
-                            _latestSensorRawData.value = intArrayOf(ch0, ch1, ch2, ch3)
+                            _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, sensor4)
 
                             // 后台逻辑处理：复用 SensorChannel 统一滤波+施密特触发器
-                            val physicalChannels = arrayOf(ch3, ch2, ch1, ch0)
+                            val physicalChannels = arrayOf(sensor4, sensor3, sensor2, sensor1)
                             for (i in 0 until 4) {
                                 val rawValue = physicalChannels[i]
                                 val newState = channels[i].pushRaw(rawValue)
@@ -891,14 +891,14 @@ class MqttService : Service() {
                                 // 边沿检测：状态变化时记录日志
                                 if (newState == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
                                     val uiChannelNum = 4 - i
-                                    val message = "传感器通道 Ch$uiChannelNum 触发告警：检测到液体 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
+                                    val message = "传感器 Sensor$uiChannelNum 触发告警：检测到液体 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
                                     logManager.writeLog(channel = uiChannelNum, level = "WARN", message = message, imagePath = "")
-                                    showAlarmNotification("通道 $uiChannelNum 传感器报警", message)
+                                    showAlarmNotification("传感器 $uiChannelNum 报警", message)
                                     triggerAlarm(applicationContext, uiChannelNum)
                                     addConsoleLog("BLE告警: $message")
                                 } else if (newState == SensorState.NO_WATER && prevState == SensorState.HAS_WATER) {
                                     val uiChannelNum = 4 - i
-                                    val message = "传感器通道 Ch$uiChannelNum 恢复正常：液体消失 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
+                                    val message = "传感器 Sensor$uiChannelNum 恢复正常：液体消失 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
                                     logManager.writeLog(channel = uiChannelNum, level = "INFO", message = message, imagePath = "")
                                     addConsoleLog("BLE恢复: $message")
                                 }

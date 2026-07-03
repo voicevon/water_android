@@ -113,8 +113,8 @@ class ParametersViewModel(application: Application) : AndroidViewModel(applicati
 
         val context = getApplication<Application>()
         // 按照树莓派格式，下发时间字符串（分钟/秒）
-        MqttService.publish(context, durationTopic, duration.toString())
-        MqttService.publish(context, pumpTimeTopic, pumpTime.toString())
+        MqttService.publish(context, durationTopic, duration.toString(), retained = true)
+        MqttService.publish(context, pumpTimeTopic, pumpTime.toString(), retained = true)
 
         return@withContext true
     }
@@ -129,16 +129,16 @@ class ParametersViewModel(application: Application) : AndroidViewModel(applicati
         val context = getApplication<Application>()
         
         // Channel 1
-        MqttService.publish(context, MqttTopics.getDurationTopic(1), _duration1.value.toString())
-        MqttService.publish(context, MqttTopics.getPumpTimeTopic(1), _pumpTime1.value.toString())
+        MqttService.publish(context, MqttTopics.getDurationTopic(1), _duration1.value.toString(), retained = true)
+        MqttService.publish(context, MqttTopics.getPumpTimeTopic(1), _pumpTime1.value.toString(), retained = true)
         
         // Channel 2
-        MqttService.publish(context, MqttTopics.getDurationTopic(2), _duration2.value.toString())
-        MqttService.publish(context, MqttTopics.getPumpTimeTopic(2), _pumpTime2.value.toString())
+        MqttService.publish(context, MqttTopics.getDurationTopic(2), _duration2.value.toString(), retained = true)
+        MqttService.publish(context, MqttTopics.getPumpTimeTopic(2), _pumpTime2.value.toString(), retained = true)
         
         // Channel 3
-        MqttService.publish(context, MqttTopics.getDurationTopic(3), _duration3.value.toString())
-        MqttService.publish(context, MqttTopics.getPumpTimeTopic(3), _pumpTime3.value.toString())
+        MqttService.publish(context, MqttTopics.getDurationTopic(3), _duration3.value.toString(), retained = true)
+        MqttService.publish(context, MqttTopics.getPumpTimeTopic(3), _pumpTime3.value.toString(), retained = true)
 
         return@withContext true
     }
