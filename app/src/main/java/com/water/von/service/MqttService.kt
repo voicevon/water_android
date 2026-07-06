@@ -185,14 +185,14 @@ class MqttService : Service() {
         private val _latestSensorRawData = MutableStateFlow<IntArray?>(null)
         val latestSensorRawData: StateFlow<IntArray?> = _latestSensorRawData.asStateFlow()
 
-        private val _stationChineseName = MutableStateFlow("济南东站污水厂")
+        private val _stationChineseName = MutableStateFlow("工厂之家")
         val stationChineseName: StateFlow<String> = _stationChineseName.asStateFlow()
 
         fun updateStationChineseName(context: Context, name: String) {
             _stationChineseName.value = name
         }
 
-        private val _stationEnglishName = MutableStateFlow("dongzhan")
+        private val _stationEnglishName = MutableStateFlow("home")
         val stationEnglishName: StateFlow<String> = _stationEnglishName.asStateFlow()
 
         fun updateStationEnglishName(context: Context, name: String) {
@@ -303,9 +303,9 @@ class MqttService : Service() {
         
         // 从 SharedPreferences 中加载并初始化中英文站点名
         val sp = getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
-        val savedName = sp.getString("station_chinese_name", "济南东站污水厂") ?: "济南东站污水厂"
+        val savedName = sp.getString("station_chinese_name", "工厂之家") ?: "工厂之家"
         _stationChineseName.value = savedName
-        val savedEnglishName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
+        val savedEnglishName = sp.getString("prefix_name", "home") ?: "home"
         _stationEnglishName.value = savedEnglishName
 
         logManager = LogManager.getInstance(applicationContext)
@@ -618,8 +618,9 @@ class MqttService : Service() {
                         val ch2 = json.optInt("sensor2", 0)
                         val ch3 = json.optInt("sensor3", 0)
                         val ch4 = json.optInt("sensor4", 0)
+                        val stateByte = json.optInt("state", 0)
                         
-                        _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4)
+                        _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4, stateByte)
                         
                         if (_isMqttDebuggingActive.value) {
                             _debugPacketCount.value++
@@ -627,16 +628,19 @@ class MqttService : Service() {
                             
                             for (i in 0 until 4) {
                                 val rawValue = physicalChannels[i]
-                                val state = channels[i].pushRaw(rawValue)
-                                val hasWater = state == SensorState.HAS_WATER
+                                val stateLocal = channels[i].pushRaw(rawValue)
+                                val hasWaterLocal = stateLocal == SensorState.HAS_WATER
+                                val hasWaterRemote = (stateByte and (1 shl (3 - i))) != 0
                                 val prevState = mqttLastStates[i]
+                                val currentRemoteState = if (hasWaterRemote) SensorState.HAS_WATER else SensorState.NO_WATER
                                 
                                 val newPoint = SensorDataPoint(
                                     ch0 = rawValue,
                                     ch1 = channels[i].filteredValue,
                                     ch2 = channels[i].baseline,
                                     ch3 = channels[i].threshold,
-                                    hasWater = hasWater
+                                    hasWater = hasWaterLocal,
+                                    hasWaterRemote = hasWaterRemote
                                 )
                                 
                                 debugDataPoints[i].update { current ->
@@ -644,8 +648,8 @@ class MqttService : Service() {
                                     list + newPoint
                                 }
 
-                                // 边沿检测：有水状态报警与 TTS 语音播报
-                                if (state == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
+                                // 边沿检测：有水状态报警与 TTS 语音播报（以远程上报状态为准）
+                                if (currentRemoteState == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
                                     val uiChannelNum = 4 - i
                                     val message = "传感器 Sensor$uiChannelNum 触发告警：检测到液体 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
                                     logManager.writeLog(channel = uiChannelNum, level = "WARN", message = message, imagePath = "")
@@ -653,7 +657,7 @@ class MqttService : Service() {
                                     triggerAlarm(applicationContext, uiChannelNum)
                                     addConsoleLog("MQTT告警: $message")
                                 }
-                                mqttLastStates[i] = state
+                                mqttLastStates[i] = currentRemoteState
                             }
                         }
                     }
@@ -865,44 +869,47 @@ class MqttService : Service() {
             override fun onScanResult(callbackType: Int, result: ScanResult?) {
                 super.onScanResult(callbackType, result)
                 result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
-                    if (data.size >= 8) {
+                    if (data.size >= 10) {
                         val sensor1 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
                         val sensor2 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
                         val sensor3 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
                         val sensor4 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
                         
-                        val seqNum = if (data.size > 8) data[8].toInt() and 0xFF else -1
-                        if (seqNum == -1 || seqNum != bleLastSeqNum) {
+                        val stateByte = data[8].toInt() and 0xFF
+                        val seqNum = data[9].toInt() and 0xFF
+                        if (seqNum != bleLastSeqNum) {
                             bleLastSeqNum = seqNum
                             
                             // 重置 15 分钟无数据超时定时器
                             resetBleTimeoutTimer()
 
                             // 更新全局 Flow 让 UI 实时消费
-                            _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, sensor4)
+                            _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, sensor4, stateByte)
 
                             // 后台逻辑处理：复用 SensorChannel 统一滤波+施密特触发器
                             val physicalChannels = arrayOf(sensor4, sensor3, sensor2, sensor1)
                             for (i in 0 until 4) {
                                 val rawValue = physicalChannels[i]
-                                val newState = channels[i].pushRaw(rawValue)
+                                val stateLocal = channels[i].pushRaw(rawValue)
+                                val hasWaterRemote = (stateByte and (1 shl (3 - i))) != 0
                                 val prevState = bleLastStates[i]
+                                val currentRemoteState = if (hasWaterRemote) SensorState.HAS_WATER else SensorState.NO_WATER
 
-                                // 边沿检测：状态变化时记录日志
-                                if (newState == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
+                                // 边沿检测：状态变化时记录日志，基于远程端上报的状态
+                                if (currentRemoteState == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
                                     val uiChannelNum = 4 - i
                                     val message = "传感器 Sensor$uiChannelNum 触发告警：检测到液体 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
                                     logManager.writeLog(channel = uiChannelNum, level = "WARN", message = message, imagePath = "")
                                     showAlarmNotification("传感器 $uiChannelNum 报警", message)
                                     triggerAlarm(applicationContext, uiChannelNum)
                                     addConsoleLog("BLE告警: $message")
-                                } else if (newState == SensorState.NO_WATER && prevState == SensorState.HAS_WATER) {
+                                } else if (currentRemoteState == SensorState.NO_WATER && prevState == SensorState.HAS_WATER) {
                                     val uiChannelNum = 4 - i
                                     val message = "传感器 Sensor$uiChannelNum 恢复正常：液体消失 (当前值: ${channels[i].filteredValue}, 阈值: ${channels[i].threshold})"
                                     logManager.writeLog(channel = uiChannelNum, level = "INFO", message = message, imagePath = "")
                                     addConsoleLog("BLE恢复: $message")
                                 }
-                                bleLastStates[i] = newState
+                                bleLastStates[i] = currentRemoteState
                             }
                         }
                     }

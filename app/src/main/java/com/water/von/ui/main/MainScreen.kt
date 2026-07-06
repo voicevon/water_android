@@ -49,7 +49,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
             title = { Text("关于", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
-                    Text("用户单位：济南东站污水厂")
+                    Text("用户单位：工厂之家")
                     Text("开发日期：2026年2月")
                     Text("技术支持：冯工")
                     Text("电话：13306400990")

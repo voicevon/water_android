@@ -8,7 +8,7 @@ import com.water.von.service.MqttService
  * 全局不变的主题（如 sensor/photo）仍使用 const val
  */
 object MqttTopics {
-    /** 动态前缀：water/{stationName}，默认 water/dongzhan */
+    /** 动态前缀：water/{stationName}，默认 water/home */
     val PREFIX: String
         get() = "water/${MqttService.stationEnglishName.value}"
 

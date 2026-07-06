@@ -39,6 +39,8 @@ import androidx.compose.foundation.horizontalScroll
 import com.water.von.ui.components.MultiLineChart
 import com.water.von.ui.components.SensorDataPoint
 import com.water.von.utils.DataProcessor
+import com.water.von.data.SensorChannel
+import com.water.von.data.SensorState
 import androidx.compose.runtime.collectAsState
 import com.water.von.service.MqttService
 import com.water.von.utils.MqttTopics
@@ -56,13 +58,13 @@ fun SensorDebugScreen(
     val isMqttConnected by MqttService.isConnected.collectAsState()
     val isBleScanning by MqttService.isBleScanning.collectAsState()
     
-    var prefixName by remember { mutableStateOf("dongzhan") }
+    var prefixName by remember { mutableStateOf("home") }
     
     // BLE 模式的局部数据状态
     val dataPointsBle = remember { Array(4) { mutableStateListOf<SensorDataPoint>() } }
     var latestPointBle by remember { mutableStateOf(SensorDataPoint(0, 0, 0, 0)) }
     var packetCountBle by remember { mutableStateOf(0) }
-    val dataProcessorsBle = remember { Array(4) { DataProcessor() } }
+    val channelsBle = remember { Array(4) { SensorChannel(it) } }
     
     // MQTT 模式的全局数据状态绑定
     val packetCountMqtt by MqttService.debugPacketCount.collectAsState()
@@ -141,7 +143,7 @@ fun SensorDebugScreen(
             hasPermissions = true
         }
         
-        prefixName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
+        prefixName = sp.getString("prefix_name", "home") ?: "home"
     }
 
     LaunchedEffect(debugMode) {
@@ -184,16 +186,24 @@ fun SensorDebugScreen(
                         val ch1 = data[1]
                         val ch2 = data[2]
                         val ch3 = data[3]
+                        val stateByte = if (data.size >= 5) data[4] else 0
                         
                         val physicalChannels = arrayOf(ch3, ch2, ch1, ch0)
                         
                         for (i in 0 until 4) {
                             val rawValue = physicalChannels[i]
-                            val filteredValue = dataProcessorsBle[i].pushRaw(rawValue)
-                            val baseline = dataProcessorsBle[i].pushBaseline(filteredValue)
-                            val threshold = baseline - DataProcessor.THRESHOLD_OFFSET
+                            val stateLocal = channelsBle[i].pushRaw(rawValue)
+                            val hasWaterLocal = stateLocal == SensorState.HAS_WATER
+                            val hasWaterRemote = (stateByte and (1 shl (3 - i))) != 0
                             
-                            val newPoint = SensorDataPoint(rawValue, filteredValue, baseline, threshold)
+                            val newPoint = SensorDataPoint(
+                                ch0 = rawValue,
+                                ch1 = channelsBle[i].filteredValue,
+                                ch2 = channelsBle[i].baseline,
+                                ch3 = channelsBle[i].threshold,
+                                hasWater = hasWaterLocal,
+                                hasWaterRemote = hasWaterRemote
+                            )
                             
                             dataPointsBle[i].add(newPoint)
                             if (dataPointsBle[i].size > maxPoints) {
@@ -291,7 +301,7 @@ fun SensorDebugScreen(
                                 onClick = { 
                                     if (!isMqttStarted) {
                                         val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
-                                        prefixName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
+                                        prefixName = sp.getString("prefix_name", "home") ?: "home"
                                         MqttService.startMqttDebugging(context, prefixName)
                                     } else {
                                         MqttService.stopMqttDebugging(context)
@@ -315,9 +325,9 @@ fun SensorDebugScreen(
                         ) {
                             listOf("#4", "#3", "#2", "#1").forEachIndexed { index, name ->
                                 val isWaterDetected = if (debugMode == "MQTT") {
-                                    mqttDataAll[index].lastOrNull()?.hasWater == true
+                                    mqttDataAll[index].lastOrNull()?.hasWaterRemote == true
                                 } else {
-                                    dataPointsBle[index].lastOrNull()?.hasWater == true
+                                    dataPointsBle[index].lastOrNull()?.hasWaterRemote == true
                                 }
                                 val dotColor = if (isWaterDetected) Color.Red else Color(0xFF4CAF50)
 
@@ -382,21 +392,38 @@ fun SensorDebugScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            // 1. 水状态 (无水/有水)
-                            val stateColor = if (latestPoint.hasWater) Color.Red else Color(0xFF4CAF50)
-                            val stateLabel = if (latestPoint.hasWater) "有水" else "无水"
+                            // 水状态 (本地与远程对比显示)
                             Row(verticalAlignment = Alignment.CenterVertically) {
+                                // 1. 本地状态
+                                val localColor = if (latestPoint.hasWater) Color.Red else Color(0xFF4CAF50)
                                 Box(
                                     modifier = Modifier
                                         .size(8.dp)
-                                        .background(stateColor, shape = androidx.compose.foundation.shape.CircleShape)
+                                        .background(localColor, shape = androidx.compose.foundation.shape.CircleShape)
                                 )
-                                Spacer(modifier = Modifier.width(6.dp))
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Text(
-                                    text = stateLabel,
-                                    fontSize = 12.sp,
+                                    text = "本地: " + (if (latestPoint.hasWater) "有水" else "无水"),
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = stateColor
+                                    color = localColor
+                                )
+                                
+                                Spacer(modifier = Modifier.width(16.dp))
+                                
+                                // 2. 远程状态
+                                val remoteColor = if (latestPoint.hasWaterRemote) Color.Red else Color(0xFF4CAF50)
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(remoteColor, shape = androidx.compose.foundation.shape.CircleShape)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "远程: " + (if (latestPoint.hasWaterRemote) "有水" else "无水"),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = remoteColor
                                 )
                             }
 

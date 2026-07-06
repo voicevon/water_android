@@ -20,7 +20,8 @@ data class SensorDataPoint(
     val ch1: Int,
     val ch2: Int,
     val ch3: Int,
-    val hasWater: Boolean = false
+    val hasWater: Boolean = false,
+    val hasWaterRemote: Boolean = false
 )
 
 @Composable

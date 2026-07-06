@@ -35,8 +35,8 @@ fun StationSettingsScreen() {
     // 首次进入加载已保存的配置
     LaunchedEffect(Unit) {
         val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
-        englishName = sp.getString("prefix_name", "dongzhan") ?: "dongzhan"
-        chineseName = sp.getString("station_chinese_name", "济南东站污水厂") ?: "济南东站污水厂"
+        englishName = sp.getString("prefix_name", "home") ?: "home"
+        chineseName = sp.getString("station_chinese_name", "工厂之家") ?: "工厂之家"
         showNotificationPopup = sp.getBoolean("show_notification_popup", true)
         useNotificationSound = sp.getBoolean("use_notification_sound", true)
         useGpsPositioning = sp.getBoolean("use_gps_positioning", true)
@@ -92,7 +92,7 @@ fun StationSettingsScreen() {
             value = englishName,
             onValueChange = { if (!isMqttDebuggingActive) englishName = it },
             label = { Text("站点英文名 (设备标识)") },
-            placeholder = { Text("例如: dongzhan") },
+            placeholder = { Text("例如: home") },
             modifier = Modifier.fillMaxWidth(),
             enabled = !isMqttDebuggingActive,
             singleLine = true,
@@ -103,7 +103,7 @@ fun StationSettingsScreen() {
             value = chineseName,
             onValueChange = { if (!isMqttDebuggingActive) chineseName = it },
             label = { Text("站点中文名 (系统标题)") },
-            placeholder = { Text("例如: 济南东站污水厂") },
+            placeholder = { Text("例如: 工厂之家") },
             modifier = Modifier.fillMaxWidth(),
             enabled = !isMqttDebuggingActive,
             singleLine = true,
