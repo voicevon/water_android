@@ -68,14 +68,23 @@ class MqttService : Service() {
     private var reconnectDelay = 2000L // 初始重连延时 2 秒
     private var reconnectJob: Job? = null
 
-    private val mqttLastStates = Array(4) { SensorState.NO_WATER }
+
 
     companion object {
         private val _activeAlarmsState = MutableStateFlow<Set<Int>>(emptySet())
         val activeAlarmsState: StateFlow<Set<Int>> = _activeAlarmsState.asStateFlow()
 
-        private val activeAlarms = mutableSetOf<Int>()
+        // 活跃告警通道集合（线程安全），分别追踪本地与远端告警来源
+        private val activeAlarms = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+        private val activeLocalAlarms = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
+        private val activeRemoteAlarms = java.util.Collections.synchronizedSet(mutableSetOf<Int>())
         private var alarmRepeatingJob: Job? = null
+
+        // 告警边沿检测状态跟踪（放在伴生对象中，避免 Service 重建后残留）
+        val mqttLastLocalStates = Array(3) { SensorState.NO_WATER }
+        val mqttLastRemoteStates = Array(3) { SensorState.NO_WATER }
+        val bleLastLocalStates = Array(3) { SensorState.NO_WATER }
+        val bleLastRemoteStates = Array(3) { SensorState.NO_WATER }
 
         @Volatile
         private var tts: TextToSpeech? = null
@@ -122,8 +131,8 @@ class MqttService : Service() {
             } catch (_: Exception) {}
         }
 
-        fun triggerAlarm(context: Context, channelNum: Int) {
-            if (activeAlarms.contains(channelNum)) return
+        fun triggerAlarm(context: Context, channelNum: Int, isLocal: Boolean) {
+            if (isLocal) activeLocalAlarms.add(channelNum) else activeRemoteAlarms.add(channelNum)
             activeAlarms.add(channelNum)
             _activeAlarmsState.value = activeAlarms.toSet()
             startRepeatingAlarm(context)
@@ -133,8 +142,14 @@ class MqttService : Service() {
             if (alarmRepeatingJob != null) return
             alarmRepeatingJob = companionScope.launch {
                 while (isActive && activeAlarms.isNotEmpty()) {
-                    val channelsText = activeAlarms.sorted().joinToString("，") { "通道${it}" }
-                    speakAlert(context, "${channelsText}，有水，有水")
+                    val text = activeAlarms.sorted().joinToString("，") { ch ->
+                        when {
+                            activeLocalAlarms.contains(ch) && activeRemoteAlarms.contains(ch) -> "通道${ch}本地及远端有水"
+                            activeLocalAlarms.contains(ch) -> "通道${ch}本地有水"
+                            else -> "通道${ch}远端有水"
+                        }
+                    }
+                    speakAlert(context, text)
                     kotlinx.coroutines.delay(5000L)
                 }
                 alarmRepeatingJob = null
@@ -143,6 +158,8 @@ class MqttService : Service() {
 
         fun clearAlarms(context: Context) {
             activeAlarms.clear()
+            activeLocalAlarms.clear()
+            activeRemoteAlarms.clear()
             _activeAlarmsState.value = emptySet()
             alarmRepeatingJob?.cancel()
             alarmRepeatingJob = null
@@ -216,11 +233,11 @@ class MqttService : Service() {
         private val _debugPacketCountBle = MutableStateFlow(0)
         val debugPacketCountBle: StateFlow<Int> = _debugPacketCountBle.asStateFlow()
 
-        val debugDataPoints = Array(4) { MutableStateFlow<List<SensorDataPoint>>(emptyList()) }
-        val debugDataPointsBle = Array(4) { MutableStateFlow<List<SensorDataPoint>>(emptyList()) }
+        val debugDataPoints = Array(3) { MutableStateFlow<List<SensorDataPoint>>(emptyList()) }
+        val debugDataPointsBle = Array(3) { MutableStateFlow<List<SensorDataPoint>>(emptyList()) }
         
-        val channelsMqtt = Array(4) { id -> com.water.von.data.SensorChannel(id + 1, thresholdOffset = 50) }
-        val channelsBle = Array(4) { id -> com.water.von.data.SensorChannel(id + 1, thresholdOffset = 50) }
+        val channelsMqtt = Array(3) { id -> com.water.von.data.SensorChannel(id + 1, thresholdOffset = 50) }
+        val channelsBle = Array(3) { id -> com.water.von.data.SensorChannel(id + 1, thresholdOffset = 50) }
 
         @Volatile
         private var autoStopJob: Job? = null
@@ -334,11 +351,15 @@ class MqttService : Service() {
         fun clearHistory(context: Context) {
             _debugPacketCount.value = 0
             _debugPacketCountBle.value = 0
-            for (i in 0 until 4) {
+            for (i in 0 until 3) {
                 debugDataPoints[i].value = emptyList()
                 debugDataPointsBle[i].value = emptyList()
                 channelsMqtt[i].reset()
                 channelsBle[i].reset()
+                mqttLastLocalStates[i] = SensorState.NO_WATER
+                mqttLastRemoteStates[i] = SensorState.NO_WATER
+                bleLastLocalStates[i] = SensorState.NO_WATER
+                bleLastRemoteStates[i] = SensorState.NO_WATER
             }
             CoroutineScope(Dispatchers.IO).launch {
                 try {
@@ -356,7 +377,7 @@ class MqttService : Service() {
          * 更新通道施密特触发器偏置值，同步 SharedPreferences 并对历史数据窗口中的阈值进行重新计算及保存
          */
         fun updateChannelOffset(context: Context, channelIndex: Int, newOffset: Int) {
-            if (channelIndex !in 0 until 4) return
+            if (channelIndex !in 0 until 3) return
             
             // 1. 更新内存计算器
             channelsMqtt[channelIndex].thresholdOffset = newOffset
@@ -383,10 +404,10 @@ class MqttService : Service() {
             // 5. 异步保存到本地 JSON 文件，确保连续性
             companionScope.launch(Dispatchers.IO) {
                 try {
-                    val currentMqtt = Array(4) { debugDataPoints[it].value }
+                    val currentMqtt = Array(3) { debugDataPoints[it].value }
                     com.water.von.utils.SensorDataPersistence.saveDataPoints(context, "sensor_debug_mqtt.json", currentMqtt)
                     
-                    val currentBle = Array(4) { debugDataPointsBle[it].value }
+                    val currentBle = Array(3) { debugDataPointsBle[it].value }
                     com.water.von.utils.SensorDataPersistence.saveDataPoints(context, "sensor_debug_ble.json", currentBle)
                 } catch (e: Exception) {
                     Log.e("MqttService", "Failed to save data points after recalculating offset", e)
@@ -414,7 +435,7 @@ class MqttService : Service() {
         }
 
         // 加载恢复 4 通道的施密特触发器偏置值 offset
-        for (i in 0 until 4) {
+        for (i in 0 until 3) {
             val offset = sp.getInt("channel_offset_$i", 50)
             channelsMqtt[i].thresholdOffset = offset
             channelsBle[i].thresholdOffset = offset
@@ -447,7 +468,7 @@ class MqttService : Service() {
             
             var maxCountMqtt = 0
             var maxCountBle = 0
-            for (i in 0 until 4) {
+            for (i in 0 until 3) {
                 if (savedMqtt[i].isNotEmpty()) {
                     debugDataPoints[i].value = savedMqtt[i]
                     maxCountMqtt = maxCountMqtt.coerceAtLeast(savedMqtt[i].size)
@@ -471,12 +492,13 @@ class MqttService : Service() {
             _debugPacketCountBle.value = maxCountBle
         }
 
-        // 监听调试激活状态，激活时重置 MQTT 历史边缘状态
+        // 监听调试激活状态，激活时重置 MQTT 历史边缘状态（本地与远端均重置）
         serviceScope.launch {
             _isMqttDebuggingActive.collect { active ->
                 if (active) {
-                    for (i in 0 until 4) {
-                        mqttLastStates[i] = SensorState.NO_WATER
+                    for (i in 0 until 3) {
+                        mqttLastLocalStates[i] = SensorState.NO_WATER
+                        mqttLastRemoteStates[i] = SensorState.NO_WATER
                     }
                 }
             }
@@ -760,23 +782,21 @@ class MqttService : Service() {
                         val ch1 = json.optInt("sensor1", 0)
                         val ch2 = json.optInt("sensor2", 0)
                         val ch3 = json.optInt("sensor3", 0)
-                        val ch4 = json.optInt("sensor4", 0)
                         val stateByte = json.optInt("state", 0)
                         
-                        _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, ch4, stateByte)
+                        _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, stateByte)
                         
                         if (_isMqttDebuggingActive.value) {
                             _debugPacketCount.value++
-                            val physicalChannels = arrayOf(ch4, ch3, ch2, ch1)
+                            val physicalChannels = arrayOf(ch1, ch2, ch3)
                             
-                            for (i in 0 until 4) {
+                            for (i in 0 until 3) {
                                 val rawValue = physicalChannels[i]
                                 val stateLocal = channelsMqtt[i].pushRaw(rawValue)
                                 val hasWaterLocal = stateLocal == SensorState.HAS_WATER
-                                val hasWaterRemote = (stateByte and (1 shl (3 - i))) != 0
-                                val prevState = mqttLastStates[i]
+                                val hasWaterRemote = (stateByte and (1 shl i)) != 0
                                 val currentRemoteState = if (hasWaterRemote) SensorState.HAS_WATER else SensorState.NO_WATER
-                                
+
                                 val newPoint = SensorDataPoint(
                                     ch0 = rawValue,
                                     ch1 = channelsMqtt[i].filteredValue,
@@ -785,26 +805,56 @@ class MqttService : Service() {
                                     hasWater = hasWaterLocal,
                                     hasWaterRemote = hasWaterRemote
                                 )
-                                
+
                                 debugDataPoints[i].update { current ->
                                     val list = if (current.size >= 1020) current.drop(1) else current
                                     list + newPoint
                                 }
 
-                                // 边沿检测：有水状态报警与 TTS 语音播报（以远程上报状态为准）
-                                if (currentRemoteState == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
-                                    val uiChannelNum = 4 - i
-                                    val message = "传感器 Sensor$uiChannelNum 触发告警：检测到液体 (当前值: ${channelsMqtt[i].filteredValue}, 阈值: ${channelsMqtt[i].threshold})"
-                                    logManager.writeLog(channel = uiChannelNum, level = "WARN", message = message, imagePath = "")
-                                    showAlarmNotification("传感器 $uiChannelNum 报警", message)
-                                    triggerAlarm(applicationContext, uiChannelNum)
-                                    addConsoleLog("MQTT告警: $message")
+                                val uiChannelNum = i + 1
+
+                                // 本地计算边沿检测
+                                val prevLocalState = mqttLastLocalStates[i]
+                                if (stateLocal == SensorState.HAS_WATER && prevLocalState == SensorState.NO_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 触发本地告警：检测到液体 (当前值: ${channelsMqtt[i].filteredValue}, 阈值: ${channelsMqtt[i].threshold})"
+                                    logManager.writeLog(channel = uiChannelNum, level = "WARN", message = msg, imagePath = "")
+                                    showAlarmNotification("传感器 $uiChannelNum 本地报警", msg)
+                                    triggerAlarm(applicationContext, uiChannelNum, isLocal = true)
+                                    addConsoleLog("MQTT本地告警: $msg")
+                                } else if (stateLocal == SensorState.NO_WATER && prevLocalState == SensorState.HAS_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 本地恢复正常：液体消失"
+                                    logManager.writeLog(channel = uiChannelNum, level = "INFO", message = msg, imagePath = "")
+                                    activeLocalAlarms.remove(uiChannelNum)
+                                    addConsoleLog("MQTT本地恢复: $msg")
                                 }
-                                mqttLastStates[i] = currentRemoteState
+                                mqttLastLocalStates[i] = stateLocal
+
+                                // 远端上报边沿检测
+                                val prevRemoteState = mqttLastRemoteStates[i]
+                                if (currentRemoteState == SensorState.HAS_WATER && prevRemoteState == SensorState.NO_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 触发远端告警：检测到液体"
+                                    logManager.writeLog(channel = uiChannelNum, level = "WARN", message = msg, imagePath = "")
+                                    showAlarmNotification("传感器 $uiChannelNum 远端报警", msg)
+                                    triggerAlarm(applicationContext, uiChannelNum, isLocal = false)
+                                    addConsoleLog("MQTT远端告警: $msg")
+                                } else if (currentRemoteState == SensorState.NO_WATER && prevRemoteState == SensorState.HAS_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 远端恢复正常：液体消失"
+                                    logManager.writeLog(channel = uiChannelNum, level = "INFO", message = msg, imagePath = "")
+                                    activeRemoteAlarms.remove(uiChannelNum)
+                                    addConsoleLog("MQTT远端恢复: $msg")
+                                }
+                                mqttLastRemoteStates[i] = currentRemoteState
+
+                                // 若本地和远端均已恢复，从活跃告警中移除该通道
+                                if (stateLocal == SensorState.NO_WATER && currentRemoteState == SensorState.NO_WATER
+                                    && activeAlarms.contains(uiChannelNum)) {
+                                    activeAlarms.remove(uiChannelNum)
+                                    _activeAlarmsState.value = activeAlarms.toSet()
+                                }
                             }
                             // 异步保存到本地
                             serviceScope.launch(Dispatchers.IO) {
-                                val currentPoints = Array(4) { debugDataPoints[it].value }
+                                val currentPoints = Array(3) { debugDataPoints[it].value }
                                 com.water.von.utils.SensorDataPersistence.saveDataPoints(applicationContext, "sensor_debug_mqtt.json", currentPoints)
                             }
                         }
@@ -955,7 +1005,7 @@ class MqttService : Service() {
     private var bleScanCallback: ScanCallback? = null
     // BLE 模式复用 companion 中的 channels[] (SensorChannel) 进行滤波+触发判断
     // 记录上一次的触发状态用于边沿检测（日志告警/恢复记录）
-    private val bleLastStates = Array(4) { SensorState.NO_WATER }
+
     private var bleLastSeqNum = -1
     private var bleTimeoutJob: Job? = null
 
@@ -996,8 +1046,9 @@ class MqttService : Service() {
 
         // 2. 初始化触发状态与 SensorChannel
         bleLastSeqNum = -1
-        for (i in 0 until 4) {
-            bleLastStates[i] = SensorState.NO_WATER
+        for (i in 0 until 3) {
+            bleLastLocalStates[i] = SensorState.NO_WATER
+            bleLastRemoteStates[i] = SensorState.NO_WATER
             channelsBle[i].reset()
         }
 
@@ -1017,14 +1068,13 @@ class MqttService : Service() {
             override fun onScanResult(callbackType: Int, result: ScanResult?) {
                 super.onScanResult(callbackType, result)
                 result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
-                    if (data.size >= 10) {
+                    if (data.size >= 8) {
                         val sensor1 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
                         val sensor2 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
                         val sensor3 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
-                        val sensor4 = ((data[6].toInt() and 0xFF) shl 8) or (data[7].toInt() and 0xFF)
                         
-                        val stateByte = data[8].toInt() and 0xFF
-                        val seqNum = data[9].toInt() and 0xFF
+                        val stateByte = data[6].toInt() and 0xFF
+                        val seqNum = data[7].toInt() and 0xFF
                         if (seqNum != bleLastSeqNum) {
                             bleLastSeqNum = seqNum
                             
@@ -1032,17 +1082,17 @@ class MqttService : Service() {
                             resetBleTimeoutTimer()
 
                             // 更新全局 Flow 让 UI 实时消费
-                            _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, sensor4, stateByte)
+                            _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, stateByte)
 
                             _debugPacketCountBle.value++
 
                             // 后台逻辑处理：使用 BLE 专属通道处理器进行滤波与触发状态机计算
-                            val physicalChannels = arrayOf(sensor4, sensor3, sensor2, sensor1)
-                            for (i in 0 until 4) {
+                            val physicalChannels = arrayOf(sensor1, sensor2, sensor3)
+                            for (i in 0 until 3) {
                                 val rawValue = physicalChannels[i]
                                 val stateLocal = channelsBle[i].pushRaw(rawValue)
                                 val hasWaterLocal = stateLocal == SensorState.HAS_WATER
-                                val hasWaterRemote = (stateByte and (1 shl (3 - i))) != 0
+                                val hasWaterRemote = (stateByte and (1 shl i)) != 0
                                 
                                 val newPoint = SensorDataPoint(
                                     ch0 = rawValue,
@@ -1058,28 +1108,51 @@ class MqttService : Service() {
                                     list + newPoint
                                 }
 
-                                val prevState = bleLastStates[i]
                                 val currentRemoteState = if (hasWaterRemote) SensorState.HAS_WATER else SensorState.NO_WATER
+                                val uiChannelNum = i + 1
 
-                                // 边沿检测：状态变化时记录日志，基于远程端上报的状态
-                                if (currentRemoteState == SensorState.HAS_WATER && prevState == SensorState.NO_WATER) {
-                                    val uiChannelNum = 4 - i
-                                    val message = "传感器 Sensor$uiChannelNum 触发告警：检测到液体 (当前值: ${channelsBle[i].filteredValue}, 阈值: ${channelsBle[i].threshold})"
-                                    logManager.writeLog(channel = uiChannelNum, level = "WARN", message = message, imagePath = "")
-                                    showAlarmNotification("传感器 $uiChannelNum 报警", message)
-                                    triggerAlarm(applicationContext, uiChannelNum)
-                                    addConsoleLog("BLE告警: $message")
-                                } else if (currentRemoteState == SensorState.NO_WATER && prevState == SensorState.HAS_WATER) {
-                                    val uiChannelNum = 4 - i
-                                    val message = "传感器 Sensor$uiChannelNum 恢复正常：液体消失 (当前值: ${channelsBle[i].filteredValue}, 阈值: ${channelsBle[i].threshold})"
-                                    logManager.writeLog(channel = uiChannelNum, level = "INFO", message = message, imagePath = "")
-                                    addConsoleLog("BLE恢复: $message")
+                                // 本地计算边沿检测
+                                val prevLocalState = bleLastLocalStates[i]
+                                if (stateLocal == SensorState.HAS_WATER && prevLocalState == SensorState.NO_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 触发本地告警：检测到液体 (当前值: ${channelsBle[i].filteredValue}, 阈值: ${channelsBle[i].threshold})"
+                                    logManager.writeLog(channel = uiChannelNum, level = "WARN", message = msg, imagePath = "")
+                                    showAlarmNotification("传感器 $uiChannelNum 本地报警", msg)
+                                    triggerAlarm(applicationContext, uiChannelNum, isLocal = true)
+                                    addConsoleLog("BLE本地告警: $msg")
+                                } else if (stateLocal == SensorState.NO_WATER && prevLocalState == SensorState.HAS_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 本地恢复正常：液体消失"
+                                    logManager.writeLog(channel = uiChannelNum, level = "INFO", message = msg, imagePath = "")
+                                    activeLocalAlarms.remove(uiChannelNum)
+                                    addConsoleLog("BLE本地恢复: $msg")
                                 }
-                                bleLastStates[i] = currentRemoteState
+                                bleLastLocalStates[i] = stateLocal
+
+                                // 远端上报边沿检测
+                                val prevRemoteState = bleLastRemoteStates[i]
+                                if (currentRemoteState == SensorState.HAS_WATER && prevRemoteState == SensorState.NO_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 触发远端告警：检测到液体"
+                                    logManager.writeLog(channel = uiChannelNum, level = "WARN", message = msg, imagePath = "")
+                                    showAlarmNotification("传感器 $uiChannelNum 远端报警", msg)
+                                    triggerAlarm(applicationContext, uiChannelNum, isLocal = false)
+                                    addConsoleLog("BLE远端告警: $msg")
+                                } else if (currentRemoteState == SensorState.NO_WATER && prevRemoteState == SensorState.HAS_WATER) {
+                                    val msg = "传感器 Sensor$uiChannelNum 远端恢复正常：液体消失 (当前值: ${channelsBle[i].filteredValue}, 阈值: ${channelsBle[i].threshold})"
+                                    logManager.writeLog(channel = uiChannelNum, level = "INFO", message = msg, imagePath = "")
+                                    activeRemoteAlarms.remove(uiChannelNum)
+                                    addConsoleLog("BLE远端恢复: $msg")
+                                }
+                                bleLastRemoteStates[i] = currentRemoteState
+
+                                // 若本地和远端均已恢复，从活跃告警中移除该通道
+                                if (stateLocal == SensorState.NO_WATER && currentRemoteState == SensorState.NO_WATER
+                                    && activeAlarms.contains(uiChannelNum)) {
+                                    activeAlarms.remove(uiChannelNum)
+                                    _activeAlarmsState.value = activeAlarms.toSet()
+                                }
                             }
                             // 异步保存到本地
                             serviceScope.launch(Dispatchers.IO) {
-                                val currentPoints = Array(4) { debugDataPointsBle[it].value }
+                                val currentPoints = Array(3) { debugDataPointsBle[it].value }
                                 com.water.von.utils.SensorDataPersistence.saveDataPoints(applicationContext, "sensor_debug_ble.json", currentPoints)
                             }
                         }

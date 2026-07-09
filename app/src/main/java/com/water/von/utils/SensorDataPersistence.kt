@@ -14,7 +14,7 @@ object SensorDataPersistence {
      * 从本地沙盒中加载指定文件的历史数据点
      */
     fun loadDataPoints(context: Context, fileName: String): List<List<SensorDataPoint>> {
-        val result = List(4) { mutableListOf<SensorDataPoint>() }
+        val result = List(3) { mutableListOf<SensorDataPoint>() }
         try {
             val file = File(context.filesDir, fileName)
             if (!file.exists()) {
@@ -22,7 +22,7 @@ object SensorDataPersistence {
             }
             val content = file.readText(Charsets.UTF_8)
             val jsonArray = JSONArray(content)
-            for (i in 0 until jsonArray.length().coerceAtMost(4)) {
+            for (i in 0 until jsonArray.length().coerceAtMost(3)) {
                 val channelArray = jsonArray.getJSONArray(i)
                 val channelList = result[i]
                 for (j in 0 until channelArray.length()) {
@@ -50,7 +50,7 @@ object SensorDataPersistence {
     fun saveDataPoints(context: Context, fileName: String, dataPoints: Array<List<SensorDataPoint>>) {
         try {
             val jsonArray = JSONArray()
-            for (i in 0 until 4) {
+            for (i in 0 until 3) {
                 val channelArray = JSONArray()
                 val list = dataPoints[i]
                 for (point in list) {

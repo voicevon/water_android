@@ -61,7 +61,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             MqttService.latestLogChannel1.collect { entry ->
                 entry?.message?.let { msg ->
-                    pipe1HasWater.value = isWaterDetected(msg)
+                    hasWater(msg)?.let { pipe1HasWater.value = it }
                     updateStatusFromMessage(msg)
                 }
             }
@@ -69,7 +69,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             MqttService.latestLogChannel2.collect { entry ->
                 entry?.message?.let { msg ->
-                    pipe2HasWater.value = isWaterDetected(msg)
+                    hasWater(msg)?.let { pipe2HasWater.value = it }
                     updateStatusFromMessage(msg)
                 }
             }
@@ -77,7 +77,7 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch {
             MqttService.latestLogChannel3.collect { entry ->
                 entry?.message?.let { msg ->
-                    pipe3HasWater.value = isWaterDetected(msg)
+                    hasWater(msg)?.let { pipe3HasWater.value = it }
                     updateStatusFromMessage(msg)
                 }
             }
@@ -92,13 +92,16 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
-    private fun isWaterDetected(msg: String): Boolean {
+    private fun hasWater(msg: String): Boolean? {
         val noWaterKeywords = listOf("泵停", "停止", "关闭", "无水", "排空", "结束", "失败", "未检测")
         if (noWaterKeywords.any { msg.contains(it) }) {
             return false
         }
         val hasWaterKeywords = listOf("泵启", "水泵启动", "启动", "有水", "抽水")
-        return hasWaterKeywords.any { msg.contains(it) }
+        if (hasWaterKeywords.any { msg.contains(it) }) {
+            return true
+        }
+        return null
     }
 
     private fun updateStatusFromMessage(msg: String) {

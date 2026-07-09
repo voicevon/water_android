@@ -78,9 +78,8 @@ fun SensorDebugScreen(
     val bleDataSensor1 by MqttService.debugDataPointsBle[0].collectAsState()
     val bleDataSensor2 by MqttService.debugDataPointsBle[1].collectAsState()
     val bleDataSensor3 by MqttService.debugDataPointsBle[2].collectAsState()
-    val bleDataSensor4 by MqttService.debugDataPointsBle[3].collectAsState()
-    val bleDataAll = remember(bleDataSensor1, bleDataSensor2, bleDataSensor3, bleDataSensor4) {
-        arrayOf(bleDataSensor1, bleDataSensor2, bleDataSensor3, bleDataSensor4)
+    val bleDataAll = remember(bleDataSensor1, bleDataSensor2, bleDataSensor3) {
+        arrayOf(bleDataSensor1, bleDataSensor2, bleDataSensor3)
     }
     val packetCountBle by MqttService.debugPacketCountBle.collectAsState()
     
@@ -89,15 +88,23 @@ fun SensorDebugScreen(
     
     var selectedChannel by remember { mutableStateOf(0) }
     
+    var currentTimeString by remember { mutableStateOf("") }
+    LaunchedEffect(Unit) {
+        val sdf = java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+        while (true) {
+            currentTimeString = sdf.format(java.util.Date())
+            kotlinx.coroutines.delay(5000L)
+        }
+    }
+    
     val maxPoints = 1020
 
     // 以 collectAsState 响应式订阅 debugDataPoints (MutableStateFlow)
     val mqttDataSensor1 by MqttService.debugDataPoints[0].collectAsState()
     val mqttDataSensor2 by MqttService.debugDataPoints[1].collectAsState()
     val mqttDataSensor3 by MqttService.debugDataPoints[2].collectAsState()
-    val mqttDataSensor4 by MqttService.debugDataPoints[3].collectAsState()
-    val mqttDataAll = remember(mqttDataSensor1, mqttDataSensor2, mqttDataSensor3, mqttDataSensor4) {
-        arrayOf(mqttDataSensor1, mqttDataSensor2, mqttDataSensor3, mqttDataSensor4)
+    val mqttDataAll = remember(mqttDataSensor1, mqttDataSensor2, mqttDataSensor3) {
+        arrayOf(mqttDataSensor1, mqttDataSensor2, mqttDataSensor3)
     }
 
     val latestPoint = if (debugMode == "MQTT") {
@@ -203,13 +210,24 @@ fun SensorDebugScreen(
                 TopAppBar(
                     title = {
                         Text(
-                            text = "传感器调试"
+                            text = "传感器调试",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold
                         )
                     },
                     navigationIcon = {
                         IconButton(onClick = onDismissRequest) {
                             Text("❮", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold, fontSize = 24.sp)
                         }
+                    },
+                    actions = {
+                        Text(
+                            text = currentTimeString,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontSize = 14.sp,
+                            modifier = Modifier.padding(end = 16.dp),
+                            fontWeight = FontWeight.Medium
+                        )
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
                         containerColor = MaterialTheme.colorScheme.primary,
@@ -268,7 +286,7 @@ fun SensorDebugScreen(
                                 .padding(bottom = 8.dp),
                             horizontalArrangement = Arrangement.SpaceEvenly
                         ) {
-                            listOf("#4", "#3", "#2", "#1").forEachIndexed { index, name ->
+                            listOf("#1", "#2", "#3").forEachIndexed { index, name ->
                                 val isWaterDetected = if (debugMode == "MQTT") {
                                     mqttDataAll[index].lastOrNull()?.hasWaterRemote == true
                                 } else {
@@ -285,7 +303,7 @@ fun SensorDebugScreen(
                                         modifier = Modifier.padding(end = 0.dp).size(24.dp)
                                     )
                                     Text(
-                                        name, 
+                                        name,
                                         fontWeight = if (selectedChannel == index) FontWeight.Bold else FontWeight.Normal,
                                         fontSize = 12.sp,
                                         color = dotColor,
@@ -422,7 +440,7 @@ fun SensorDebugScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(300.dp)
+                                .height(330.dp)
                                 .padding(bottom = 16.dp)
                                 .background(Color.Black)
                         ) {
@@ -513,10 +531,13 @@ fun SensorDebugScreen(
                         Button(
                             onClick = { MqttService.clearHistory(context) },
                             colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error),
-                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            modifier = Modifier
+                                .align(Alignment.CenterHorizontally)
+                                .width(120.dp)
+                                .height(36.dp),
                             contentPadding = PaddingValues(0.dp)
                         ) {
-                            Text("清空历史数据", fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                            Text("清空历史数据", fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                     }
                 }
@@ -552,15 +573,13 @@ fun ParametersPanel(context: Context, sp: android.content.SharedPreferences) {
         )
         
         // 物理映射说明：
-        // 通道 1 对应 MqttService 中的索引 3
-        // 通道 2 对应 MqttService 中的索引 2
-        // 通道 3 对应 MqttService 中的索引 1
-        // 通道 4 对应 MqttService 中的索引 0
+        // 通道 1 对应 MqttService 中的索引 0
+        // 通道 2 对应 MqttService 中的索引 1
+        // 通道 3 对应 MqttService 中的索引 2
         val channelMappings = listOf(
-            Triple(1, 3, "传感器 1"),
-            Triple(2, 2, "传感器 2"),
-            Triple(3, 1, "传感器 3"),
-            Triple(4, 0, "传感器 4")
+            Triple(1, 0, "传感器 1"),
+            Triple(2, 1, "传感器 2"),
+            Triple(3, 2, "传感器 3")
         )
         
         channelMappings.forEach { (uiNum, index, desc) ->
