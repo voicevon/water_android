@@ -57,6 +57,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
     val pipe2HasWater by viewModel.pipe2HasWater.collectAsState()
     val pipe3HasWater by viewModel.pipe3HasWater.collectAsState()
     val currentStatusIndex by viewModel.currentStatusIndex.collectAsState()
+    val currentSensorId by viewModel.currentSensorId.collectAsState()
 
     val context = LocalContext.current
     var displayFile by remember { mutableStateOf<File?>(null) }
@@ -93,32 +94,64 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
             modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            PipeCard(
-                name = "次氯酸钠",
-                hasWater = pipe1HasWater,
-                latestMsg = log1?.message ?: "暂无消息",
-                modifier = Modifier.weight(1f).fillMaxHeight()
-            )
-            PipeCard(
-                name = "碳源",
-                hasWater = pipe2HasWater,
-                latestMsg = log2?.message ?: "暂无消息",
-                modifier = Modifier.weight(1f).fillMaxHeight()
-            )
-            PipeCard(
-                name = "铁盐",
-                hasWater = pipe3HasWater,
-                latestMsg = log3?.message ?: "暂无消息",
-                modifier = Modifier.weight(1f).fillMaxHeight()
-            )
+            Column(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                PipeCard(
+                    name = "次氯酸钠",
+                    hasWater = pipe1HasWater,
+                    latestMsg = log1?.message ?: "暂无消息",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (currentSensorId == 1) {
+                    TotalSamplingProgressBar(viewModel)
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                PipeCard(
+                    name = "碳源",
+                    hasWater = pipe2HasWater,
+                    latestMsg = log2?.message ?: "暂无消息",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (currentSensorId == 2) {
+                    TotalSamplingProgressBar(viewModel)
+                }
+            }
+            Column(
+                modifier = Modifier.weight(1f).fillMaxHeight(),
+                horizontalAlignment = Alignment.CenterHorizontally
+            ) {
+                PipeCard(
+                    name = "铁盐",
+                    hasWater = pipe3HasWater,
+                    latestMsg = log3?.message ?: "暂无消息",
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (currentSensorId == 3) {
+                    TotalSamplingProgressBar(viewModel)
+                }
+            }
         }
 
-        // 2. 中部分：10步采样流程起伏式步骤条
+        // 2. 中部分：10步采样流程折线步骤条与实时进度条
+        if (currentSensorId != -1) {
+            PumpProgressBar(viewModel)
+        }
+
         StepProgressBar(
             currentIndex = currentStatusIndex
         )
 
-        Spacer(modifier = Modifier.height(24.dp))
+        if (currentSensorId != -1) {
+            RestProgressBar(viewModel, currentStatusIndex)
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // 3. 下部分：污水图像快照监视区
         Card(
@@ -562,6 +595,103 @@ fun PhotoPlaceholder(onTakePhoto: () -> Unit, isTakingPhoto: Boolean) {
             } else {
                 Text("📷 远程拍照", fontSize = 11.sp, color = Color.White)
             }
+        }
+    }
+}
+
+@Composable
+fun TotalSamplingProgressBar(viewModel: MonitorViewModel) {
+    val totalMax by viewModel.totalSamplingTimeMax.collectAsState()
+    val totalRemaining by viewModel.totalSamplingTimeRemaining.collectAsState()
+    if (totalMax > 0) {
+        val progress = if (totalMax > 0) totalRemaining.toFloat() / totalMax else 0f
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 4.dp, vertical = 2.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.LightGray.copy(alpha = 0.3f)
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = "${(totalRemaining + 59) / 60}分 / ${totalMax / 60}分",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+        }
+    }
+}
+
+@Composable
+fun PumpProgressBar(viewModel: MonitorViewModel) {
+    val pumpMax by viewModel.pumpWorkTimeMax.collectAsState()
+    val pumpRemaining by viewModel.pumpWorkTimeRemaining.collectAsState()
+    if (pumpMax > 0) {
+        val progress = if (pumpMax > 0) pumpRemaining.toFloat() / pumpMax else 0f
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "⚡ 水泵运行中: ${pumpRemaining}秒 / 共 ${pumpMax}秒",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFFFB300) // 黄色高亮展示
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth(0.4f)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = Color(0xFFFFB300),
+                trackColor = Color.LightGray.copy(alpha = 0.3f)
+            )
+        }
+    }
+}
+
+@Composable
+fun RestProgressBar(viewModel: MonitorViewModel, currentStatusIndex: Int) {
+    val restMax by viewModel.restTimeMax.collectAsState()
+    val restRemaining by viewModel.restTimeRemaining.collectAsState()
+    if (restMax > 0) {
+        val progress = if (restMax > 0) restRemaining.toFloat() / restMax else 0f
+        val stateLabel = when (currentStatusIndex) {
+            1 -> "待稳等待"
+            9 -> "结束返回"
+            else -> "延时待命"
+        }
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = "⏳ $stateLabel: ${(restRemaining + 59) / 60}分 / 共 ${restMax / 60}分",
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.primary
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            LinearProgressIndicator(
+                progress = { progress.coerceIn(0f, 1f) },
+                modifier = Modifier
+                    .fillMaxWidth(0.6f)
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp)),
+                color = MaterialTheme.colorScheme.primary,
+                trackColor = Color.LightGray.copy(alpha = 0.3f)
+            )
         }
     }
 }

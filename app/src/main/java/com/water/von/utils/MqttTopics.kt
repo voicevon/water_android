@@ -15,8 +15,7 @@ object MqttTopics {
     // Subscribed Topics（动态，随站点名变化）
     val SYSTEM_STATUS: String get() = "$PREFIX/system/status"
     val SYSTEM_INFO: String get() = "$PREFIX/system/info"
-    val LOG_WILDCARD: String get() = "$PREFIX/log/+"
-    val LOG_PREFIX: String get() = "$PREFIX/log/"
+    val SYSTEM_STATE: String get() = "$PREFIX/state"
 
     // Subscribed Topics（全局固定，不随站点变化）
     const val PHOTO_WILDCARD = "water/photo/status/+"

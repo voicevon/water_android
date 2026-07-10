@@ -45,6 +45,14 @@ import java.util.UUID
 import com.water.von.ui.components.SensorDataPoint
 import com.water.von.data.SensorState
 
+data class StateUpdateEvent(
+    val sensorId: Int,
+    val stage: Int,
+    val duration: Float,
+    val pumpTime: Int,
+    val elapsed: Int
+)
+
 /**
  * 污水采样监控前台常驻网络连接服务
  * 负责后台维持 MQTT 长连接、消息订阅与归档存储
@@ -180,6 +188,9 @@ class MqttService : Service() {
 
         private val _systemStatus = MutableStateFlow("offline")
         val systemStatus: StateFlow<String> = _systemStatus.asStateFlow()
+
+        private val _stateUpdateFlow = MutableStateFlow<StateUpdateEvent?>(null)
+        val stateUpdateFlow: StateFlow<StateUpdateEvent?> = _stateUpdateFlow.asStateFlow()
 
         private val _systemInfo = MutableStateFlow("未接收到数据\n---\n---")
         val systemInfo: StateFlow<String> = _systemInfo.asStateFlow()
@@ -742,7 +753,7 @@ class MqttService : Service() {
             mqttClient?.subscribe(MqttTopics.SYSTEM_STATUS, 1)
             mqttClient?.subscribe(MqttTopics.SYSTEM_INFO, 1)
             mqttClient?.subscribe(MqttTopics.PHOTO_WILDCARD, 1)
-            mqttClient?.subscribe(MqttTopics.LOG_WILDCARD, 1) // 通配符订阅 1, 2, 3 通道日志
+            mqttClient?.subscribe(MqttTopics.SYSTEM_STATE, 1) // 订阅全新的结构化流程状态主题
             mqttClient?.subscribe(MqttTopics.SENSOR_STATUS_TOPIC, 1) // 订阅全局水传感器上报数据主题
             addConsoleLog("已成功订阅监控主题队列")
         } catch (e: Exception) {
@@ -899,37 +910,57 @@ class MqttService : Service() {
                 }
             }
 
-            topic.startsWith(MqttTopics.LOG_PREFIX) -> {
-                val channelStr = topic.substringAfter(MqttTopics.LOG_PREFIX)
-                val channelId = channelStr.toIntOrNull() ?: 1
-                val logPayload = String(payloadBytes, Charsets.UTF_8)
-                
-                // pi_water 日志消息通常由 \n 拆分为三行。我们提取第三行的内容作为具体动作消息
-                val lines = logPayload.split("\n")
-                val actionMessage = if (lines.size >= 3) lines[2] else logPayload
-                
-                val level = if (actionMessage.contains("ERROR") || actionMessage.contains("异常") || actionMessage.contains("失败")) {
-                    "ERROR"
-                } else if (actionMessage.contains("警告") || actionMessage.contains("丢")) {
-                    "WARN"
-                } else {
-                    "INFO"
-                }
+            topic == MqttTopics.SYSTEM_STATE -> {
+                try {
+                    val payloadStr = String(payloadBytes, Charsets.UTF_8)
+                    val json = org.json.JSONObject(payloadStr)
+                    val sensorId = json.optInt("sensorId", 1)
+                    val stage = json.optInt("stage", -1)
+                    val remark = json.optString("remark", "")
+                    val duration = json.optDouble("duration", 0.0).toFloat()
+                    val pumpTime = json.optInt("pumpTime", 0)
+                    val uptime = json.optLong("uptime", 0L)
+                    val stageStartSec = json.optLong("stageStartSec", 0L)
 
-                // 写入本地归档日志
-                val logEntry = logManager.writeLog(
-                    channel = channelId,
-                    level = level,
-                    message = actionMessage,
-                    imagePath = ""
-                )
+                    if (stage != -1) {
+                        // 计算 elapsed 已流逝秒数（防负校准）
+                        val elapsedRaw = (uptime - stageStartSec).toInt()
+                        val elapsed = if (elapsedRaw < 0) 0 else elapsedRaw
 
-                // 实时推送通知并更新 UI flow
-                updateChannelFlow(channelId, logEntry)
-                
-                // 若包含警告级别，立即发横幅报警通知
-                if (level == "ERROR" || level == "WARN") {
-                    showAlarmNotification("通道 $channelId 状态警告", actionMessage)
+                        // 1. 本地根据 stage 强制注入有水/无水关键字以对齐 UI 端的模糊匹配机制
+                        val hasWater = stage in 2..9
+                        val waterStateText = if (hasWater) "有水" else "无水"
+                        val msgText = "通道${sensorId}检测到${waterStateText}，状态跳转：${remark}"
+                        
+                        // 确定事件日志级别
+                        val level = when (stage) {
+                            9 -> "INFO"
+                            else -> "INFO"
+                        }
+
+                        // 2. 归档本地事件日志
+                        val logEntry = logManager.writeLog(
+                            channel = sensorId,
+                            level = level,
+                            message = msgText,
+                            imagePath = ""
+                        )
+
+                        // 3. 实时推送给 UI 的订阅 Flow
+                        updateChannelFlow(sensorId, logEntry)
+
+                        // 4. 更新高能状态流与指示灯状态
+                        _stateUpdateFlow.value = StateUpdateEvent(
+                            sensorId = sensorId,
+                            stage = stage,
+                            duration = duration,
+                            pumpTime = pumpTime,
+                            elapsed = elapsed
+                        )
+                        _systemStatus.value = stage.toString()
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "解析 SYSTEM_STATE JSON 失败: ${e.message}")
                 }
             }
         }
