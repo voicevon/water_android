@@ -41,7 +41,7 @@ import java.io.File
 
 /**
  * 重定义后的主监控页面 MonitorScreen
- * 呈现三段式核心监控：上部管道流、中部起伏折线步骤条、下部图像快照与网关诊断看板
+ * 呈现三段式核心监控：上部管道流、中部起伏折线步骤条、下部图像快照
  */
 @Composable
 fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
@@ -91,11 +91,11 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
     ) {
         // 1. 上部分：三个药液管道水流监视卡片（置顶第一栏，无网关连接条）
         Row(
-            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min),
+            modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 PipeCard(
@@ -109,7 +109,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 }
             }
             Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 PipeCard(
@@ -123,7 +123,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 }
             }
             Column(
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f),
                 horizontalAlignment = Alignment.CenterHorizontally
             ) {
                 PipeCard(
@@ -138,18 +138,11 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
             }
         }
 
-        // 2. 中部分：10步采样流程折线步骤条与实时进度条
-        if (currentSensorId != -1) {
-            PumpProgressBar(viewModel)
-        }
-
+        // 2. 中部分：10步采样流程折线步骤条与内置实时进度条
         StepProgressBar(
-            currentIndex = currentStatusIndex
+            currentIndex = currentStatusIndex,
+            viewModel = viewModel
         )
-
-        if (currentSensorId != -1) {
-            RestProgressBar(viewModel, currentStatusIndex)
-        }
 
         Spacer(modifier = Modifier.height(16.dp))
 
@@ -225,76 +218,6 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                 }
             }
         }
-
-        // 4. 下部分：网关物理诊断看板
-        Card(
-            modifier = Modifier.fillMaxWidth(),
-            elevation = CardDefaults.cardElevation(2.dp)
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(16.dp)
-            ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "物理网关诊断看板",
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.Bold,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-
-                    val isOffline = systemStatus.equals("offline", ignoreCase = true)
-                    val statusText = if (isOffline) "柜体离线" else "柜体正常"
-                    val statusColor = if (isOffline) Color.Red else Color.Green
-
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        Box(
-                            modifier = Modifier
-                                .size(8.dp)
-                                .clip(RoundedCornerShape(50))
-                                .background(statusColor)
-                        )
-                        Spacer(modifier = Modifier.width(4.dp))
-                        Text(
-                            text = statusText,
-                            style = MaterialTheme.typography.labelMedium,
-                            color = statusColor
-                        )
-                    }
-                }
-                Spacer(modifier = Modifier.height(12.dp))
-
-                // 解析 \n 三行数据
-                val infoLines = systemInfo.split("\n")
-                val deviceTime = infoLines.getOrNull(0) ?: "---"
-                val bootTime = infoLines.getOrNull(1) ?: "---"
-                val uptime = infoLines.getOrNull(2) ?: "---"
-
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween
-                ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "系统当前时钟", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                        Text(text = deviceTime, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    }
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(text = "控制器启动时间", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                        Text(text = bootTime, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                    }
-                }
-                Spacer(modifier = Modifier.height(8.dp))
-                Column {
-                    Text(text = "累积稳定运行时间", style = MaterialTheme.typography.labelSmall, color = Color.Gray)
-                    Text(text = uptime, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.SemiBold)
-                }
-            }
-        }
     }
 
     if (showImagePreview && displayFile != null) {
@@ -350,211 +273,6 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
     }
 }
 
-/**
- * 管道水流状态卡片组件 (去除了有水流/无水流汉字标识，完全由图形色彩表达)
- */
-@Composable
-fun PipeCard(
-    name: String,
-    hasWater: Boolean,
-    latestMsg: String,
-    modifier: Modifier = Modifier
-) {
-    val backgroundColor = if (hasWater) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    val strokeColor = if (hasWater) MaterialTheme.colorScheme.primary else Color.Transparent
-    val pipeColor = if (hasWater) Color(0xFF2196F3) else Color.Gray
-
-    Card(
-        modifier = modifier
-            .padding(2.dp),
-        colors = CardDefaults.cardColors(containerColor = backgroundColor),
-        border = if (hasWater) BorderStroke(1.5.dp, strokeColor) else null,
-        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .fillMaxHeight()
-                .padding(vertical = 12.dp, horizontal = 8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
-        ) {
-            // 水流/管道示意圆形图
-            Box(
-                modifier = Modifier
-                    .size(46.dp)
-                    .clip(RoundedCornerShape(50))
-                    .background(pipeColor.copy(alpha = 0.15f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Text(
-                    text = if (hasWater) "💧" else "⚪",
-                    fontSize = 22.sp
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                text = name,
-                style = MaterialTheme.typography.bodyMedium,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                color = if (hasWater) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1
-            )
-        }
-    }
-}
-
-/**
- * 10 步起伏式采样流程折线步骤条组件 (Wavy-height Step Line)
- */
-@Composable
-fun StepProgressBar(
-    currentIndex: Int
-) {
-    val steps = listOf("空闲", "待稳", "取头样", "延时", "取中样", "延时", "取尾样", "延时", "排空", "结束")
-    
-    // Y 偏移量高度档次对应这 10 个状态 (Y值越小表示高度越高)
-    // 0:等待(110dp), 1:准备(60dp), 2:头样(10dp), 3:等待(60dp), 4:中样(10dp), 5:等待(60dp), 6:尾样(10dp), 7:等待(60dp), 8:排空(10dp), 9:结束(110dp)
-    val yOffsets = listOf(150.dp, 100.dp, 50.dp, 100.dp, 50.dp, 100.dp, 50.dp, 100.dp, 50.dp, 150.dp)
-
-    val density = LocalDensity.current
-    val activeColor = MaterialTheme.colorScheme.primary
-    val inactiveColor = Color.LightGray.copy(alpha = 0.5f)
-
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        elevation = CardDefaults.cardElevation(2.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(220.dp)
-            ) {
-                val widthPx = constraints.maxWidth
-                val widthDp = with(density) { widthPx.toDp() }
-                
-                val stepCount = steps.size
-                val stepWidth = widthDp / stepCount
-                val nodeRadius = 14.dp
-
-                // 计算 10 个步骤圆心的绝对 DP 坐标，用于 Canvas 画线
-                val points = steps.mapIndexed { index, _ ->
-                    val x = stepWidth * index + stepWidth / 2
-                    val y = yOffsets[index] + nodeRadius
-                    Pair(x, y)
-                }
-
-                // 1. 绘制折线背景与高亮折线
-                Canvas(modifier = Modifier.fillMaxSize()) {
-                    val path = Path()
-                    points.forEachIndexed { index, pair ->
-                        val xPx = pair.first.toPx()
-                        val yPx = pair.second.toPx()
-                        if (index == 0) {
-                            path.moveTo(xPx, yPx)
-                        } else {
-                            path.lineTo(xPx, yPx)
-                        }
-                    }
-
-                    // 绘制底图灰色折线
-                    drawPath(
-                        path = path,
-                        color = inactiveColor,
-                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
-                    )
-
-                    // 绘制已完成/激活状态的高亮蓝色折线
-                    if (currentIndex >= 0) {
-                        val activePath = Path()
-                        val activePointsCount = (currentIndex + 1).coerceAtMost(stepCount)
-                        for (i in 0 until activePointsCount) {
-                            val xPx = points[i].first.toPx()
-                            val yPx = points[i].second.toPx()
-                            if (i == 0) {
-                                activePath.moveTo(xPx, yPx)
-                            } else {
-                                activePath.lineTo(xPx, yPx)
-                            }
-                        }
-                        drawPath(
-                            path = activePath,
-                            color = activeColor,
-                            style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round)
-                        )
-                    }
-                }
-
-                // 2. 绘制 10 个起伏分布的节点
-                steps.forEachIndexed { index, stepName ->
-                    val isCompleted = index < currentIndex
-                    val isActive = index == currentIndex
-
-                    val nodeColor = when {
-                        isActive -> activeColor
-                        isCompleted -> MaterialTheme.colorScheme.secondary
-                        else -> Color.Gray.copy(alpha = 0.5f)
-                    }
-
-                    val textColor = when {
-                        isActive -> activeColor
-                        isCompleted -> MaterialTheme.colorScheme.onSurface
-                        else -> Color.Gray
-                    }
-
-                    val fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
-
-                    // X, Y 位移定位
-                    val xPos = stepWidth * index + stepWidth / 2 - nodeRadius
-                    val yPos = yOffsets[index]
-
-                    Box(
-                        modifier = Modifier
-                            .offset(x = xPos, y = yPos)
-                            .size(28.dp)
-                            .clip(RoundedCornerShape(50))
-                            .background(nodeColor),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = (index + 1).toString(),
-                            color = Color.White,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 11.sp
-                        )
-                    }
-
-                    // 将文字精确错落定位在节点正下方 (部分阶段放在上方，部分阶段放在下方)
-                    val textWidth = 50.dp // 设定一个合理字宽用于居中
-                    val textXPos = stepWidth * index + stepWidth / 2 - textWidth / 2
-                    val textYPos = if (index % 2 == 0 && index != 0 && index != 9) {
-                        yPos - 35.dp
-                    } else {
-                        yPos + 32.dp
-                    }
-
-                    Text(
-                        text = stepName,
-                        fontSize = 9.sp,
-                        fontWeight = fontWeight,
-                        color = textColor,
-                        textAlign = TextAlign.Center,
-                        maxLines = 1,
-                        modifier = Modifier
-                            .offset(x = textXPos, y = textYPos)
-                            .width(textWidth)
-                    )
-                }
-            }
-        }
-    }
-}
-
 @Composable
 fun PhotoPlaceholder(onTakePhoto: () -> Unit, isTakingPhoto: Boolean) {
     Column(
@@ -600,6 +318,220 @@ fun PhotoPlaceholder(onTakePhoto: () -> Unit, isTakingPhoto: Boolean) {
 }
 
 @Composable
+fun PipeCard(
+    name: String,
+    hasWater: Boolean,
+    latestMsg: String,
+    modifier: Modifier = Modifier
+) {
+    val backgroundColor = if (hasWater) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+    val strokeColor = if (hasWater) MaterialTheme.colorScheme.primary else Color.Transparent
+    val pipeColor = if (hasWater) Color(0xFF2196F3) else Color.Gray
+
+    Card(
+        modifier = modifier
+            .padding(2.dp)
+            .aspectRatio(1f),
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        border = if (hasWater) BorderStroke(1.5.dp, strokeColor) else null,
+        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 8.dp, horizontal = 4.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            // 水流/管道示意圆形图
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(pipeColor.copy(alpha = 0.15f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = if (hasWater) "💧" else "⚪",
+                    fontSize = 18.sp
+                )
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = name,
+                style = MaterialTheme.typography.bodyMedium,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.Bold,
+                color = if (hasWater) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+        }
+    }
+}
+
+@Composable
+fun StepProgressBar(
+    currentIndex: Int,
+    viewModel: MonitorViewModel
+) {
+    val steps = listOf("空闲", "待稳", "取头样", "延时", "取中样", "延时", "取尾样", "延时", "排空", "结束")
+    val yOffsets = listOf(150.dp, 100.dp, 50.dp, 100.dp, 50.dp, 100.dp, 50.dp, 100.dp, 50.dp, 150.dp)
+
+    val density = LocalDensity.current
+    val activeColor = MaterialTheme.colorScheme.primary
+    val inactiveColor = Color.LightGray.copy(alpha = 0.5f)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        elevation = CardDefaults.cardElevation(2.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            val currentSensorId by viewModel.currentSensorId.collectAsState()
+            if (currentSensorId != -1) {
+                val pumpMax by viewModel.pumpWorkTimeMax.collectAsState()
+                if (pumpMax > 0) {
+                    PumpProgressBar(viewModel)
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+            }
+
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(220.dp)
+            ) {
+                val widthPx = constraints.maxWidth
+                val widthDp = with(density) { widthPx.toDp() }
+                
+                val stepCount = steps.size
+                val stepWidth = widthDp / stepCount
+                val nodeRadius = 14.dp
+
+                val points = steps.mapIndexed { index, _ ->
+                    val x = stepWidth * index + stepWidth / 2
+                    val y = yOffsets[index] + nodeRadius
+                    Pair(x, y)
+                }
+
+                Canvas(modifier = Modifier.fillMaxSize()) {
+                    val path = Path()
+                    points.forEachIndexed { index, pair ->
+                        val xPx = pair.first.toPx()
+                        val yPx = pair.second.toPx()
+                        if (index == 0) {
+                            path.moveTo(xPx, yPx)
+                        } else {
+                            path.lineTo(xPx, yPx)
+                        }
+                    }
+
+                    drawPath(
+                        path = path,
+                        color = inactiveColor,
+                        style = Stroke(width = 2.5.dp.toPx(), cap = StrokeCap.Round)
+                    )
+
+                    if (currentIndex >= 0) {
+                        val activePath = Path()
+                        val activePointsCount = (currentIndex + 1).coerceAtMost(stepCount)
+                        for (i in 0 until activePointsCount) {
+                            val xPx = points[i].first.toPx()
+                            val yPx = points[i].second.toPx()
+                            if (i == 0) {
+                                activePath.moveTo(xPx, yPx)
+                            } else {
+                                activePath.lineTo(xPx, yPx)
+                            }
+                        }
+                        drawPath(
+                            path = activePath,
+                            color = activeColor,
+                            style = Stroke(width = 3.5.dp.toPx(), cap = StrokeCap.Round)
+                        )
+                    }
+                }
+
+                steps.forEachIndexed { index, stepName ->
+                    val isCompleted = index < currentIndex
+                    val isActive = index == currentIndex
+
+                    val nodeColor = when {
+                        isActive -> activeColor
+                        isCompleted -> MaterialTheme.colorScheme.secondary
+                        else -> Color.Gray.copy(alpha = 0.5f)
+                    }
+
+                    val textColor = when {
+                        isActive -> {
+                            if (index == 2 || index == 4 || index == 6 || index == 8) {
+                                Color(0xFFFFB300)
+                            } else {
+                                activeColor
+                            }
+                        }
+                        isCompleted -> MaterialTheme.colorScheme.onSurface
+                        else -> Color.Gray
+                    }
+
+                    val fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal
+
+                    val xPos = stepWidth * index + stepWidth / 2 - nodeRadius
+                    val yPos = yOffsets[index]
+
+                    Box(
+                        modifier = Modifier
+                            .offset(x = xPos, y = yPos)
+                            .size(28.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(nodeColor),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = (index + 1).toString(),
+                            color = Color.White,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 11.sp
+                        )
+                    }
+
+                    val textWidth = 50.dp
+                    val textXPos = stepWidth * index + stepWidth / 2 - textWidth / 2
+                    val textYPos = if (index % 2 == 0 && index != 0 && index != 9) {
+                        yPos - 35.dp
+                    } else {
+                        yPos + 32.dp
+                    }
+
+                    Text(
+                        text = stepName,
+                        fontSize = 9.sp,
+                        fontWeight = fontWeight,
+                        color = textColor,
+                        textAlign = TextAlign.Center,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .offset(x = textXPos, y = textYPos)
+                            .width(textWidth)
+                    )
+                }
+            }
+
+            if (currentSensorId != -1) {
+                val restMax by viewModel.restTimeMax.collectAsState()
+                if (restMax > 0) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    RestProgressBar(viewModel, currentIndex)
+                }
+            }
+        }
+    }
+}
+
+@Composable
 fun TotalSamplingProgressBar(viewModel: MonitorViewModel) {
     val totalMax by viewModel.totalSamplingTimeMax.collectAsState()
     val totalRemaining by viewModel.totalSamplingTimeRemaining.collectAsState()
@@ -638,22 +570,22 @@ fun PumpProgressBar(viewModel: MonitorViewModel) {
     if (pumpMax > 0) {
         val progress = if (pumpMax > 0) pumpRemaining.toFloat() / pumpMax else 0f
         Column(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "⚡ 水泵运行中: ${pumpRemaining}秒 / 共 ${pumpMax}秒",
-                fontSize = 11.sp,
+                text = "⚡ ${pumpRemaining}秒 / 共 ${pumpMax}秒",
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color(0xFFFFB300) // 黄色高亮展示
+                color = Color(0xFFFFB300)
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             LinearProgressIndicator(
                 progress = { progress.coerceIn(0f, 1f) },
                 modifier = Modifier
-                    .fillMaxWidth(0.4f)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp)),
+                    .fillMaxWidth(0.3f)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
                 color = Color(0xFFFFB300),
                 trackColor = Color.LightGray.copy(alpha = 0.3f)
             )
@@ -667,33 +599,26 @@ fun RestProgressBar(viewModel: MonitorViewModel, currentStatusIndex: Int) {
     val restRemaining by viewModel.restTimeRemaining.collectAsState()
     if (restMax > 0) {
         val progress = if (restMax > 0) restRemaining.toFloat() / restMax else 0f
-        val stateLabel = when (currentStatusIndex) {
-            1 -> "待稳等待"
-            9 -> "结束返回"
-            else -> "延时待命"
-        }
         Column(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
             Text(
-                text = "⏳ $stateLabel: ${(restRemaining + 59) / 60}分 / 共 ${restMax / 60}分",
-                fontSize = 11.sp,
+                text = "⏳ ${(restRemaining + 59) / 60}分 / 共 ${restMax / 60}分",
+                fontSize = 10.sp,
                 fontWeight = FontWeight.Bold,
                 color = MaterialTheme.colorScheme.primary
             )
-            Spacer(modifier = Modifier.height(4.dp))
+            Spacer(modifier = Modifier.height(2.dp))
             LinearProgressIndicator(
                 progress = { progress.coerceIn(0f, 1f) },
                 modifier = Modifier
-                    .fillMaxWidth(0.6f)
-                    .height(6.dp)
-                    .clip(RoundedCornerShape(3.dp)),
+                    .fillMaxWidth(0.4f)
+                    .height(4.dp)
+                    .clip(RoundedCornerShape(2.dp)),
                 color = MaterialTheme.colorScheme.primary,
                 trackColor = Color.LightGray.copy(alpha = 0.3f)
             )
         }
     }
 }
-
-
