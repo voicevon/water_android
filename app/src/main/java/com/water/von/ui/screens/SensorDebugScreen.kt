@@ -617,7 +617,7 @@ fun ParametersPanel(context: Context, sp: android.content.SharedPreferences) {
                     ) {
                         IconButton(
                             onClick = {
-                                if (offsetValue > 10) {
+                                if (offsetValue > -500) {
                                     val newValue = offsetValue - 5
                                     offsetValue = newValue
                                     MqttService.updateChannelOffset(context, index, newValue)
@@ -636,7 +636,7 @@ fun ParametersPanel(context: Context, sp: android.content.SharedPreferences) {
                         
                         IconButton(
                             onClick = {
-                                if (offsetValue < 200) {
+                                if (offsetValue < 500) {
                                     val newValue = offsetValue + 5
                                     offsetValue = newValue
                                     MqttService.updateChannelOffset(context, index, newValue)

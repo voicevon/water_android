@@ -53,17 +53,33 @@ class SensorChannel(
         val currentState = lastState
         lastState = when (currentState) {
             SensorState.NO_WATER -> {
-                if (filteredValue > threshold) {
-                    SensorState.HAS_WATER
+                if (thresholdOffset >= 0) {
+                    if (filteredValue > threshold) {
+                        SensorState.HAS_WATER
+                    } else {
+                        SensorState.NO_WATER
+                    }
                 } else {
-                    SensorState.NO_WATER
+                    if (filteredValue < threshold) {
+                        SensorState.HAS_WATER
+                    } else {
+                        SensorState.NO_WATER
+                    }
                 }
             }
             SensorState.HAS_WATER -> {
-                if (filteredValue < threshold) {
-                    SensorState.NO_WATER
+                if (thresholdOffset >= 0) {
+                    if (filteredValue < threshold) {
+                        SensorState.NO_WATER
+                    } else {
+                        SensorState.HAS_WATER
+                    }
                 } else {
-                    SensorState.HAS_WATER
+                    if (filteredValue > threshold) {
+                        SensorState.NO_WATER
+                    } else {
+                        SensorState.HAS_WATER
+                    }
                 }
             }
         }
