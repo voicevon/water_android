@@ -41,9 +41,11 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import org.eclipse.paho.client.mqttv3.*
 import org.eclipse.paho.client.mqttv3.persist.MemoryPersistence
+import org.json.JSONObject
 import java.util.UUID
 import com.water.von.ui.components.SensorDataPoint
 import com.water.von.data.SensorState
+import com.water.von.detection.MutationDetector
 
 data class StateUpdateEvent(
     val sensorId: Int,
@@ -71,14 +73,39 @@ class MqttService : Service() {
     private var isServiceRunning = false
     private val notificationCounter = java.util.concurrent.atomic.AtomicInteger(2000)
 
+    /** MQTT 常驻保活锁：与 BLE 的 wakeLock 分开独立，防止互相影响 */
+    private var mqttWakeLock: PowerManager.WakeLock? = null
+    /** Wi-Fi 高性能锁：防止 Wi-Fi 降频或休眠断网（仅对 Wi-Fi 连接生效，4G/5G 无效） */
+    private var wifiLock: android.net.wifi.WifiManager.WifiLock? = null
+
     @Volatile
     private var shouldReconnect = true
     private var reconnectDelay = 2000L // 初始重连延时 2 秒
     private var reconnectJob: Job? = null
 
+    /**
+     * 定时巡视拍照任务（对应 ESP32 mut_interval_sec 参数）
+     * 按配置间隔向 water/photo/take 发布指令，触发 ESP32 摄像头拍照
+     */
+    private var periodicPhotoJob: Job? = null
+
+    /**
+     * 图像突变检测器（Service 实例级单例，持有 20 帧滑动窗口状态）
+     * 算法与 ESP32 端 MutationDetector 完全一致
+     */
+    private val mutationDetector = MutationDetector()
+
 
 
     companion object {
+        // --- Doze 心跳常量 ---
+        /** MqttHeartbeatReceiver 向 Service 发送心跳检查的 Action */
+        const val ACTION_HEARTBEAT_CHECK = "com.water.von.ACTION_HEARTBEAT_CHECK"
+        /** 心跳间隔 8 分钟，接近 Android 9+ Doze 维护窗口最小间隔（系统自动顺延到满足最小 9 分钟） */
+        private const val HEARTBEAT_INTERVAL_MS = 8 * 60 * 1000L
+        /** CameraSettingsScreen 保存配置后通知 Service 更新定时拍照任务的 Action */
+        const val ACTION_UPDATE_PERIODIC_PHOTO = "com.water.von.ACTION_UPDATE_PERIODIC_PHOTO"
+
         private val _activeAlarmsState = MutableStateFlow<Set<Int>>(emptySet())
         val activeAlarmsState: StateFlow<Set<Int>> = _activeAlarmsState.asStateFlow()
 
@@ -425,6 +452,21 @@ class MqttService : Service() {
                 }
             }
         }
+
+        /**
+         * 通知 MqttService 重新读取 SharedPreferences 并更新定时拍照任务
+         * 由 CameraSettingsScreen 保存配置后调用
+         */
+        fun applyPeriodicPhotoSettings(context: Context) {
+            val intent = Intent(context, MqttService::class.java).apply {
+                action = ACTION_UPDATE_PERIODIC_PHOTO
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                context.startForegroundService(intent)
+            } else {
+                context.startService(intent)
+            }
+        }
     }
 
     override fun onCreate() {
@@ -515,6 +557,9 @@ class MqttService : Service() {
             }
         }
 
+        // 恢复定时巡视拍照任务（若上次保存时已启用）
+        startPeriodicPhotoTaskIfEnabled()
+
         addConsoleLog("MqttService 已创建")
     }
 
@@ -522,6 +567,7 @@ class MqttService : Service() {
         if (!isServiceRunning) {
             isServiceRunning = true
             startForegroundService()
+            acquireMqttLocks()  // 获取 MQTT 专属 WakeLock + WifiLock，防止 Doze 冻结连接
             shouldReconnect = true
             connectMqtt()
         }
@@ -550,6 +596,22 @@ class MqttService : Service() {
             clearAlarms(applicationContext)
             val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
             manager.cancelAll()
+        } else if (intent?.action == ACTION_HEARTBEAT_CHECK) {
+            // AlarmManager Doze 唤醒心跳检查
+            if (mqttClient?.isConnected == true) {
+                addConsoleLog("[Doze心跳] MQTT 连接正常，继续保持")
+            } else {
+                addConsoleLog("[Doze心跳] MQTT 已断开，触发重连")
+                if (shouldReconnect) connectMqtt()
+            }
+            // 链式续期：调度下一次心跳
+            scheduleNextHeartbeat()
+        } else if (intent?.action == ACTION_UPDATE_PERIODIC_PHOTO) {
+            // CameraSettingsScreen 保存配置后触发，重启定时拍照任务
+            periodicPhotoJob?.cancel()
+            periodicPhotoJob = null
+            mutationDetector.reset()  // 重置滑动窗口，避免参数变更导致误报
+            startPeriodicPhotoTaskIfEnabled()
         }
 
         return START_STICKY
@@ -696,7 +758,7 @@ class MqttService : Service() {
                     this.password = password.toCharArray()
                     isCleanSession = true
                     connectionTimeout = 10
-                    keepAliveInterval = 60
+                    keepAliveInterval = 20  // 降至 20 秒：Broker 超时判断 = 20×1.5 = 30 秒，为 AlarmManager 心跳留出足够窗口
                 }
 
                 mqttClient?.setCallback(object : MqttCallbackExtended {
@@ -705,6 +767,7 @@ class MqttService : Service() {
                         reconnectDelay = 2000L // 重置重连延迟
                         addConsoleLog("MQTT 连接成功: $serverURI")
                         subscribeToTopics()
+                        scheduleNextHeartbeat() // 连接成功后立即注册 AlarmManager Doze 心跳
                     }
 
                     override fun connectionLost(cause: Throwable?) {
@@ -755,7 +818,9 @@ class MqttService : Service() {
             mqttClient?.subscribe(MqttTopics.PHOTO_WILDCARD, 1)
             mqttClient?.subscribe(MqttTopics.SYSTEM_STATE, 1) // 订阅全新的结构化流程状态主题
             mqttClient?.subscribe(MqttTopics.SENSOR_STATUS_TOPIC, 1) // 订阅全局水传感器上报数据主题
-            addConsoleLog("已成功订阅监控主题队列")
+            // 告警专用 Retained Topic：重连后 Broker 会立即补发未清除的告警，实现断线期间告警零丢失
+            mqttClient?.subscribe("${MqttTopics.PREFIX}/alarm", 1)
+            addConsoleLog("已成功订阅监控主题队列（含 Retained 告警主题）")
         } catch (e: Exception) {
             addConsoleLog("订阅主题失败: ${e.message}")
         }
@@ -899,13 +964,36 @@ class MqttService : Service() {
                     val relativePath = logManager.savePhoto(payloadBytes)
                     if (relativePath.isNotEmpty()) {
                         _latestPhotoPath.value = relativePath
-                        // 同时将新图片写入日志归档记录中（假定当前触发的是活跃的泵启动）
                         logManager.writeLog(
-                            channel = 1, // 缺省至通道 1
+                            channel = 1,
                             level = "INFO",
                             message = "接收到污水图片快照",
                             imagePath = relativePath
                         )
+                    }
+
+                    // ── 突变检测（对应 ESP32 mutationDetector.processFrame）────────
+                    val sp = getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
+                    if (sp.getBoolean("mut_enable", false)) {
+                        val blockThresh  = sp.getInt("mut_block_thresh_pct", 15) / 100f
+                        val minBlocks    = sp.getInt("mut_min_blocks", 3)
+                        val alarm = mutationDetector.processFrame(
+                            jpegBytes   = payloadBytes,
+                            blockThresh = blockThresh,
+                            minBlocks   = minBlocks
+                        )
+                        addConsoleLog(
+                            "[突变检测] Y=${String.format("%.1f", mutationDetector.lastYGlobal)}" +
+                            " C_changed=${mutationDetector.lastCChanged}/${MutationDetector.MD_GRID_COUNT}" +
+                            " thresh=${String.format("%.2f", blockThresh)}" +
+                            " alarm=${if (alarm) "YES" else "NO"}"
+                        )
+                        if (alarm) {
+                            val msg = "摄像头检测到有物体进入视野（变化网格 ${mutationDetector.lastCChanged}/${MutationDetector.MD_GRID_COUNT}）"
+                            showAlarmNotification("📷 摄像头入侵报警", msg)
+                            speakAlert(applicationContext, "摄像头检测到有物体进入视野")
+                            logManager.writeLog(channel = 1, level = "WARN", message = msg, imagePath = relativePath)
+                        }
                     }
                 }
             }
@@ -961,6 +1049,19 @@ class MqttService : Service() {
                     }
                 } catch (e: Exception) {
                     Log.e(TAG, "解析 SYSTEM_STATE JSON 失败: ${e.message}")
+                }
+            }
+            topic == "${MqttTopics.PREFIX}/alarm" -> {
+                // Retained 告警主题处理：断线期间的告警在重连成功后由 Broker 自动表2
+                // payload 为空表示 ESP32 已主动清除（告警已解除），对空消息不做任何处理
+                val payload = String(payloadBytes, Charsets.UTF_8).trim()
+                if (payload.isNotEmpty()) {
+                    // Retained 告警补发：捨出高优先级通知，确保断线期间的告警不被遗漏
+                    addConsoleLog("⭐ Retained 告警被动补发收到: $payload")
+                    showAlarmNotification("📡 断线期间告警补发", "重连后检测到未处理的告警: $payload")
+                } else {
+                    // 收到空 payload：ESP32 已主动清除告警保留状态，告警已解除
+                    addConsoleLog("Retained 告警已由 ESP32 清除（告警状态已恢复）")
                 }
             }
         }
@@ -1255,7 +1356,11 @@ class MqttService : Service() {
 
     override fun onDestroy() {
         stopBleScanInternal()
-        
+        periodicPhotoJob?.cancel()  // 停止定时拍照任务
+        periodicPhotoJob = null
+        cancelHeartbeat()         // 取消 AlarmManager 心跳
+        releaseMqttLocks()        // 释放 MQTT WakeLock + WifiLock
+
         // 释放 TTS 引擎资源
         shutdownTts()
 
@@ -1271,5 +1376,145 @@ class MqttService : Service() {
         isServiceRunning = false
         addConsoleLog("MqttService 已销毁")
         super.onDestroy()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // 定时巡视拍照 & 突变检测辅助方法
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * 从 SharedPreferences 读取配置，若启用则启动定时拍照协程
+     * 对应 ESP32 端：get_mutation_enable() + get_mutation_interval_sec()
+     */
+    private fun startPeriodicPhotoTaskIfEnabled() {
+        val sp = getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
+        if (!sp.getBoolean("mut_enable", false)) {
+            addConsoleLog("定时巡视拍照：未启用，跳过")
+            return
+        }
+        val intervalSec = sp.getInt("mut_interval_sec", 10).toLong().coerceIn(5, 300)
+        addConsoleLog("定时巡视拍照已启动（间隔 ${intervalSec}s，对应 ESP32 mut_interval）")
+
+        periodicPhotoJob = serviceScope.launch {
+            // 首次延迟一个完整周期，避免启动瞬间连发指令
+            kotlinx.coroutines.delay(intervalSec * 1000L)
+            while (isActive) {
+                if (_isConnected.value) {
+                    val jsonPayload = JSONObject().apply {
+                        put("site_name", _stationEnglishName.value)
+                        put("action", "capture")
+                    }.toString()
+                    publishInternal(
+                        topic   = MqttTopics.CONTROL_TAKE_PHOTO,
+                        payload = jsonPayload
+                    )
+                    addConsoleLog("[定时巡视] 已下发拍照指令 → ${_stationEnglishName.value}")
+                } else {
+                    addConsoleLog("[定时巡视] MQTT 未连接，跳过本次拍照")
+                }
+                kotlinx.coroutines.delay(intervalSec * 1000L)
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Doze 心跳与锁管理辅助方法
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /**
+     * 获取 MQTT 常驻 WakeLock + WifiLock。
+     * WakeLock: 保持 CPU 微弱运转（不亮屏），确保休眠期收到 MQTT 数据包时 CPU 处于工作状态。
+     * WifiLock: 高性能模式防止 Wi-Fi 休眠（对 4G/5G 无效，但对 Wi-Fi 环境有显著改善）。
+     */
+    private fun acquireMqttLocks() {
+        try {
+            if (mqttWakeLock?.isHeld != true) {
+                val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+                mqttWakeLock = pm.newWakeLock(
+                    PowerManager.PARTIAL_WAKE_LOCK,
+                    "von:MqttWakeLock"
+                )
+                mqttWakeLock?.acquire()  // 常驻持有，在 onDestroy 释放
+                addConsoleLog("已获取 MQTT PARTIAL_WAKE_LOCK")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "获取 WakeLock 失败: ${e.message}")
+        }
+        try {
+            if (wifiLock?.isHeld != true) {
+                val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as android.net.wifi.WifiManager
+                wifiLock = wm.createWifiLock(
+                    android.net.wifi.WifiManager.WIFI_MODE_FULL_HIGH_PERF,
+                    "von:MqttWifiLock"
+                )
+                wifiLock?.acquire()
+                addConsoleLog("已获取 MQTT WifiLock (FULL_HIGH_PERF)")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "获取 WifiLock 失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 释放 MQTT WakeLock + WifiLock。在 onDestroy 中调用。
+     */
+    private fun releaseMqttLocks() {
+        try { if (mqttWakeLock?.isHeld == true) mqttWakeLock?.release() } catch (_: Exception) {}
+        try { if (wifiLock?.isHeld == true) wifiLock?.release() } catch (_: Exception) {}
+        mqttWakeLock = null
+        wifiLock = null
+        addConsoleLog("已释放 MQTT WakeLock + WifiLock")
+    }
+
+    /**
+     * 调度下一次 Doze 兼容心跳。
+     * 使用 setExactAndAllowWhileIdle()：即使处于深层打盹（Deep Doze）也能按时触发。
+     * Android 9+ 要求相邻两次间隔 ≥ 9 分钟，系统会自动顺延到满足条件。
+     */
+    private fun scheduleNextHeartbeat() {
+        try {
+            val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val pi = android.app.PendingIntent.getBroadcast(
+                this,
+                1001,
+                android.content.Intent(this, com.water.von.receiver.MqttHeartbeatReceiver::class.java).apply {
+                    action = com.water.von.receiver.MqttHeartbeatReceiver.ACTION_MQTT_HEARTBEAT
+                },
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                        android.app.PendingIntent.FLAG_IMMUTABLE else 0
+            )
+            am.setExactAndAllowWhileIdle(
+                android.app.AlarmManager.RTC_WAKEUP,
+                System.currentTimeMillis() + HEARTBEAT_INTERVAL_MS,
+                pi
+            )
+            addConsoleLog("[Doze心跳] 已调度下一次心跳（${HEARTBEAT_INTERVAL_MS / 60000} 分钟后）")
+        } catch (e: Exception) {
+            Log.e(TAG, "调度 AlarmManager 心跳失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 取消所有尚未触发的心跳 Alarm。在 onDestroy 中调用。
+     */
+    private fun cancelHeartbeat() {
+        try {
+            val am = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val pi = android.app.PendingIntent.getBroadcast(
+                this,
+                1001,
+                android.content.Intent(this, com.water.von.receiver.MqttHeartbeatReceiver::class.java).apply {
+                    action = com.water.von.receiver.MqttHeartbeatReceiver.ACTION_MQTT_HEARTBEAT
+                },
+                android.app.PendingIntent.FLAG_NO_CREATE or
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M)
+                        android.app.PendingIntent.FLAG_IMMUTABLE else 0
+            )
+            pi?.let { am.cancel(it) }
+            addConsoleLog("[Doze心跳] 已取消心跳 Alarm")
+        } catch (e: Exception) {
+            Log.e(TAG, "取消 AlarmManager 心跳失败: ${e.message}")
+        }
     }
 }

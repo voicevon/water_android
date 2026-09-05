@@ -19,6 +19,7 @@ import com.water.von.service.MqttService
 /**
  * 本地配置页面 StationSettingsScreen
  * 提供站点英文名（MQTT 设备标识）、站点中文名（界面全局标题）、通知开关与 GPS 开关的编辑与持久化保存
+ * 保存时若传感器调试正在运行，自动停止调试后再保存生效
  */
 @Composable
 fun StationSettingsScreen() {
@@ -29,8 +30,8 @@ fun StationSettingsScreen() {
     var useNotificationSound by remember { mutableStateOf(true) }
     var useGpsPositioning by remember { mutableStateOf(true) }
 
-    // 检查 MQTT 调试是否正在运行，如果正在运行则锁定配置修改
-    val isMqttDebuggingActive = MqttService.activeSensorPrefix != null
+    // 响应式订阅 MQTT 调试状态
+    val isMqttDebuggingActive by MqttService.isMqttDebuggingActive.collectAsState()
 
     // 首次进入加载已保存的配置
     LaunchedEffect(Unit) {
@@ -60,12 +61,12 @@ fun StationSettingsScreen() {
             Card(
                 modifier = Modifier.fillMaxWidth(),
                 colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.errorContainer,
-                    contentColor = MaterialTheme.colorScheme.onErrorContainer
+                    containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onTertiaryContainer
                 )
             ) {
                 Text(
-                    text = "⚠️ 传感器调试处于运行状态，锁定配置项。请先在“传感器调试”中停止调试后再修改本地参数。",
+                    text = "ℹ️ 传感器调试正在运行。点击【停止调试并保存配置】将自动停止调试并立即生效。",
                     modifier = Modifier.padding(12.dp),
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Bold
@@ -90,22 +91,20 @@ fun StationSettingsScreen() {
 
         OutlinedTextField(
             value = englishName,
-            onValueChange = { if (!isMqttDebuggingActive) englishName = it },
+            onValueChange = { englishName = it },
             label = { Text("站点英文名 (设备标识)") },
             placeholder = { Text("例如: home") },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isMqttDebuggingActive,
             singleLine = true,
             shape = RoundedCornerShape(8.dp)
         )
 
         OutlinedTextField(
             value = chineseName,
-            onValueChange = { if (!isMqttDebuggingActive) chineseName = it },
+            onValueChange = { chineseName = it },
             label = { Text("站点中文名 (系统标题)") },
             placeholder = { Text("例如: 工厂之家") },
             modifier = Modifier.fillMaxWidth(),
-            enabled = !isMqttDebuggingActive,
             singleLine = true,
             shape = RoundedCornerShape(8.dp)
         )
@@ -124,8 +123,7 @@ fun StationSettingsScreen() {
             }
             Switch(
                 checked = showNotificationPopup,
-                onCheckedChange = { if (!isMqttDebuggingActive) showNotificationPopup = it },
-                enabled = !isMqttDebuggingActive
+                onCheckedChange = { showNotificationPopup = it }
             )
         }
 
@@ -141,8 +139,7 @@ fun StationSettingsScreen() {
             }
             Switch(
                 checked = useNotificationSound,
-                onCheckedChange = { if (!isMqttDebuggingActive) useNotificationSound = it },
-                enabled = !isMqttDebuggingActive
+                onCheckedChange = { useNotificationSound = it }
             )
         }
 
@@ -158,8 +155,7 @@ fun StationSettingsScreen() {
             }
             Switch(
                 checked = useGpsPositioning,
-                onCheckedChange = { if (!isMqttDebuggingActive) useGpsPositioning = it },
-                enabled = !isMqttDebuggingActive
+                onCheckedChange = { useGpsPositioning = it }
             )
         }
 
@@ -167,6 +163,11 @@ fun StationSettingsScreen() {
 
         Button(
             onClick = {
+                // 若传感器调试正在运行，自动停止后再保存配置
+                if (isMqttDebuggingActive) {
+                    MqttService.stopMqttDebugging(context)
+                }
+
                 val sp = context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE)
                 sp.edit().apply {
                     putString("prefix_name", englishName)
@@ -174,22 +175,27 @@ fun StationSettingsScreen() {
                     putBoolean("show_notification_popup", showNotificationPopup)
                     putBoolean("use_notification_sound", useNotificationSound)
                     putBoolean("use_gps_positioning", useGpsPositioning)
+                    // 明确写入 mqtt_debugging_active = false，确保状态同步
+                    putBoolean("mqtt_debugging_active", false)
                     apply()
                 }
-                
+
                 // 同步更新全局的中英文参数
                 MqttService.updateStationChineseName(context, chineseName)
                 MqttService.updateStationEnglishName(context, englishName)
-                
+
                 Toast.makeText(context, "本地配置已保存，立即生效", Toast.LENGTH_SHORT).show()
             },
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
-            enabled = !isMqttDebuggingActive,
             shape = RoundedCornerShape(8.dp)
         ) {
-            Text("保存配置", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+            Text(
+                text = if (isMqttDebuggingActive) "停止调试并保存配置" else "保存配置",
+                fontWeight = FontWeight.Bold,
+                fontSize = 16.sp
+            )
         }
     }
 }

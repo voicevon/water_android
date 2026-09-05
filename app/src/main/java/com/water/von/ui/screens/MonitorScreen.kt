@@ -206,7 +206,7 @@ fun MonitorScreen(viewModel: MonitorViewModel = viewModel()) {
                                 Spacer(modifier = Modifier.width(6.dp))
                                 Text("拍摄中", fontSize = 10.sp, color = Color.White)
                             } else {
-                                Text("📷 远程拍照", fontSize = 10.sp, color = Color.White)
+                                Text("📷 单次拍照", fontSize = 10.sp, color = Color.White)
                             }
                         }
                     }

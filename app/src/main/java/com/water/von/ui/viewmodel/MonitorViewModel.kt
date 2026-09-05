@@ -167,14 +167,19 @@ class MonitorViewModel(application: Application) : AndroidViewModel(application)
     }
 
     /**
-     * 手动触发远程拍照功能
+     * 手动触发远程拍照功能（即时抓图 Action，不更改相机的长期工作模式）
      */
     fun takePhoto(context: Context) {
         if (isTakingPhoto.value) return
         isTakingPhoto.value = true
 
-        // 发送控制指令至 MQTT 主题，载荷为当前目标站点的英文名
-        MqttService.publish(context, MqttTopics.CONTROL_TAKE_PHOTO, MqttService.stationEnglishName.value)
+        // 发送控制指令至 MQTT 主题，Payload 为符合规范的 JSON (Action: capture)
+        val jsonPayload = org.json.JSONObject().apply {
+            put("site_name", MqttService.stationEnglishName.value)
+            put("action", "capture")
+        }.toString()
+
+        MqttService.publish(context, MqttTopics.CONTROL_TAKE_PHOTO, jsonPayload)
 
         // 启动 15 秒超时强制解锁，防止因丢包或树莓派离线导致按钮永久卡死
         timeoutJob?.cancel()

@@ -20,6 +20,7 @@ import com.water.von.MainActivity
 import com.water.von.ui.screens.SensorDebugScreen
 import com.water.von.ui.screens.NetworkLogsScreen
 import com.water.von.ui.screens.StationSettingsScreen
+import com.water.von.ui.screens.CameraSettingsScreen
 
 /**
  * 主容器页面 MainScreen
@@ -115,6 +116,13 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             onClick = {
                                 showMenu = false
                                 selectedTab = 4
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("摄像头配置") },
+                            onClick = {
+                                showMenu = false
+                                selectedTab = 6
                             }
                         )
                         DropdownMenuItem(
@@ -274,6 +282,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
                     3 -> ConfigScreen()
                     4 -> NetworkLogsScreen()
                     5 -> StationSettingsScreen()
+                    6 -> CameraSettingsScreen()
                 }
             }
         }

@@ -69,6 +69,9 @@ class MainActivity : ComponentActivity() {
         // 1. 检查并申请通知权限 (Android 13+)
         checkAndRequestNotificationPermission()
 
+        // 1b. 检查并引导开启电池优化白名单（突破国产 ROM Doze 网络限制的关键授权）
+        checkAndRequestBatteryOptimizationExemption()
+
         // 2. 自动启动后台常驻连接前台服务
         startMqttForegroundService()
 
@@ -128,6 +131,34 @@ class MainActivity : ComponentActivity() {
             startForegroundService(serviceIntent)
         } else {
             startService(serviceIntent)
+        }
+    }
+    /**
+     * 检查并引导用户开启电池优化白名单（Ignore Battery Optimizations）。
+     * 授权后：Android 系统 Doze 模式不再限制该 App 的后台网络访问和 CPU 唤醒，
+     * 是实现手机休眠期间实时接收 MQTT 告警的关键前提。
+     */
+    private fun checkAndRequestBatteryOptimizationExemption() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val pm = getSystemService(android.os.PowerManager::class.java)
+        if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            android.app.AlertDialog.Builder(this)
+                .setTitle("需要关闭电池优化")
+                .setMessage(
+                    "为确保手机休眠期间实时收到污水告警，\n" +
+                    "请在下一页面中将本应用设置为【不限制后台活动】。\n\n" +
+                    "（如拒绝，手机休眠超过 5 分钟后可能漏报告警）"
+                )
+                .setPositiveButton("去设置") { _, _ ->
+                    startActivity(
+                        android.content.Intent(
+                            android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
+                            android.net.Uri.parse("package:$packageName")
+                        )
+                    )
+                }
+                .setNegativeButton("暂时跳过", null)
+                .show()
         }
     }
 }
