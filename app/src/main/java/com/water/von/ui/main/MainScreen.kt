@@ -21,6 +21,7 @@ import com.water.von.ui.screens.SensorDebugScreen
 import com.water.von.ui.screens.NetworkLogsScreen
 import com.water.von.ui.screens.StationSettingsScreen
 import com.water.von.ui.screens.CameraSettingsScreen
+import com.water.von.ui.screens.Hx711ConfigScreen
 
 /**
  * 主容器页面 MainScreen
@@ -35,6 +36,7 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showSensorDebugWindow by remember { mutableStateOf(MainActivity.showSensorDebugOnLaunch) }
+    var showHx711ConfigDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(MainActivity.showSensorDebugOnLaunch) {
         if (MainActivity.showSensorDebugOnLaunch) {
@@ -71,6 +73,14 @@ fun MainScreen(modifier: Modifier = Modifier) {
             onDismissRequest = { 
                 showSensorDebugWindow = false 
                 MainActivity.showSensorDebugOnLaunch = false
+            }
+        )
+    }
+
+    if (showHx711ConfigDialog) {
+        Hx711ConfigScreen(
+            onDismissRequest = {
+                showHx711ConfigDialog = false
             }
         )
     }
@@ -130,6 +140,13 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             onClick = {
                                 showMenu = false
                                 showSensorDebugWindow = true
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("HX711 标定配置") },
+                            onClick = {
+                                showMenu = false
+                                showHx711ConfigDialog = true
                             }
                         )
                         DropdownMenuItem(

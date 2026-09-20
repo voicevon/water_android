@@ -240,6 +240,28 @@ class MqttService : Service() {
         private val _latestSensorRawData = MutableStateFlow<IntArray?>(null)
         val latestSensorRawData: StateFlow<IntArray?> = _latestSensorRawData.asStateFlow()
 
+        // 传感器各通道 16-bit 原始 AD 读数 [ad1, ad2, ad3]
+        private val _latestSensorAdData = MutableStateFlow<IntArray?>(null)
+        val latestSensorAdData: StateFlow<IntArray?> = _latestSensorAdData.asStateFlow()
+
+        // HX711 远程标定真实参数结构
+        data class Hx711ChannelCalibration(
+            val ch: Int,
+            val k: Float,
+            val c: Int,
+            val shift: Int,
+            val ad: Int,
+            val gram: Float,
+            val enabled: Boolean,
+            val online: Boolean
+        )
+
+        private val _latestCalibrationStatus = MutableStateFlow<List<Hx711ChannelCalibration>?>(null)
+        val latestCalibrationStatus: StateFlow<List<Hx711ChannelCalibration>?> = _latestCalibrationStatus.asStateFlow()
+
+        private val _detectedSensorDeviceName = MutableStateFlow<String?>("home")
+        val detectedSensorDeviceName: StateFlow<String?> = _detectedSensorDeviceName.asStateFlow()
+
         private val _stationChineseName = MutableStateFlow("工厂之家")
         val stationChineseName: StateFlow<String> = _stationChineseName.asStateFlow()
 
@@ -818,6 +840,7 @@ class MqttService : Service() {
             mqttClient?.subscribe(MqttTopics.PHOTO_WILDCARD, 1)
             mqttClient?.subscribe(MqttTopics.SYSTEM_STATE, 1) // 订阅全新的结构化流程状态主题
             mqttClient?.subscribe(MqttTopics.SENSOR_STATUS_TOPIC, 1) // 订阅全局水传感器上报数据主题
+            mqttClient?.subscribe(MqttTopics.SENSOR_CALIBRATION_STATUS_TOPIC, 1) // 订阅 HX711 标定状态主题
             // 告警专用 Retained Topic：重连后 Broker 会立即补发未清除的告警，实现断线期间告警零丢失
             mqttClient?.subscribe("${MqttTopics.PREFIX}/alarm", 1)
             addConsoleLog("已成功订阅监控主题队列（含 Retained 告警主题）")
@@ -849,18 +872,57 @@ class MqttService : Service() {
         val payloadBytes = message.payload
         
         when {
-            topic == MqttTopics.SENSOR_STATUS_TOPIC -> {
+            topic == MqttTopics.SENSOR_CALIBRATION_STATUS_TOPIC -> {
                 try {
                     val jsonStr = String(payloadBytes, Charsets.UTF_8)
                     val json = org.json.JSONObject(jsonStr)
                     val name = json.optString("name", "")
-                    if (name.isNotEmpty() && name == activeSensorPrefix) {
-                        val ch1 = json.optInt("sensor1", 0)
-                        val ch2 = json.optInt("sensor2", 0)
-                        val ch3 = json.optInt("sensor3", 0)
-                        val stateByte = json.optInt("state", 0)
-                        
-                        _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, stateByte)
+                    if (name.isNotEmpty()) {
+                        _detectedSensorDeviceName.value = name
+                    }
+                    val channelsArray = json.optJSONArray("channels")
+                    if (channelsArray != null) {
+                        val list = mutableListOf<Hx711ChannelCalibration>()
+                        for (i in 0 until channelsArray.length()) {
+                            val item = channelsArray.getJSONObject(i)
+                            list.add(
+                                Hx711ChannelCalibration(
+                                    ch = item.optInt("ch", i + 1),
+                                    k = item.optDouble("k", 1.0).toFloat(),
+                                    c = item.optInt("c", 32768),
+                                    shift = item.optInt("shift", 6),
+                                    ad = item.optInt("ad", 0),
+                                    gram = item.optDouble("gram", 0.0).toFloat(),
+                                    enabled = item.optBoolean("enabled", true),
+                                    online = item.optBoolean("online", true)
+                                )
+                            )
+                        }
+                        _latestCalibrationStatus.value = list
+                        addConsoleLog("已同步获取设备当前标定参数 (设备: ${if (name.isNotEmpty()) name else "home"})")
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "解析标定状态失败: ${e.message}", e)
+                }
+            }
+
+            topic == MqttTopics.SENSOR_STATUS_TOPIC -> {
+                try {
+                    val jsonStr = String(payloadBytes, Charsets.UTF_8)
+                    val json = org.json.JSONObject(jsonStr)
+                    val ch1 = json.optInt("sensor1", 0)
+                    val ch2 = json.optInt("sensor2", 0)
+                    val ch3 = json.optInt("sensor3", 0)
+                    val stateByte = json.optInt("state", 0)
+                    
+                    _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, stateByte)
+                    
+                    if (json.has("ad1")) {
+                        val ad1 = json.optInt("ad1", 0)
+                        val ad2 = json.optInt("ad2", 0)
+                        val ad3 = json.optInt("ad3", 0)
+                        _latestSensorAdData.value = intArrayOf(ad1, ad2, ad3)
+                    }
                         
                         if (_isMqttDebuggingActive.value) {
                             _debugPacketCount.value++
@@ -934,7 +996,6 @@ class MqttService : Service() {
                                 com.water.von.utils.SensorDataPersistence.saveDataPoints(applicationContext, "sensor_debug_mqtt.json", currentPoints)
                             }
                         }
-                    }
                 } catch (e: Exception) {
                     Log.e(TAG, "Failed to parse sensor status data: ${e.message}", e)
                 }

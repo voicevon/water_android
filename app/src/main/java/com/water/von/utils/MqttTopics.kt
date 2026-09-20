@@ -20,10 +20,12 @@ object MqttTopics {
     // Subscribed Topics（全局固定，不随站点变化）
     const val PHOTO_WILDCARD = "water/photo/status/+"
     const val SENSOR_STATUS_TOPIC = "water/sensor/status"
+    const val SENSOR_CALIBRATION_STATUS_TOPIC = "water/sensor/calibration/status"
 
     // Published Topics（全局固定）
     const val CONTROL_TAKE_PHOTO = "water/photo/take"
     const val SENSOR_CONTROL_TOPIC = "water/sensor/start"
+    const val SENSOR_CALIBRATION_TOPIC = "water/sensor/calibration"
 
     fun getDurationTopic(channelId: Int): String = "$PREFIX/config/duration/$channelId"
     fun getPumpTimeTopic(channelId: Int): String = "$PREFIX/config/pump_time/$channelId"
