@@ -2,9 +2,10 @@
 
 | 项目名称 | 摄像头 MQTT 通信协议与拍照控制逻辑规范 |
 | :--- | :--- |
-| 文档版本 | V1.0.0 |
+| 文档版本 | V1.1.0 |
 | 创建日期 | 2026-06-27 |
-| 项目状态 | 草稿 / 规划中 |
+| 最后更新 | 2026-09-20 |
+| 项目状态 | 已实现 / 维护中 |
 | 协议类型 | MQTT (Message Queuing Telemetry Transport) |
 
 ---
@@ -23,7 +24,7 @@
 
 ```mermaid
 graph TD
-    App[手机客户端 / 控制端] -- "① 发布拍照指令<br>Topic: water/photo/take<br>Payload: 站点英文名" --> Broker[MQTT Broker]
+    App[手机客户端 / 控制端] -- "① 发布拍照指令<br>Topic: water/photo/take<br>Payload: {site_name, action}" --> Broker[MQTT Broker]
     Broker -- "② 订阅并接收指令" --> CameraNodes[摄像头节点群<br>如: dongzhan, home, ...]
     CameraNodes -- "③ 执行拍照并发布图片数据<br>Topic: water/photo/status/站点英文名" --> Broker
     Broker -- "④ 订阅通配符主题并接收图片<br>Topic: water/photo/status/+" --> App
@@ -31,7 +32,7 @@ graph TD
 
 | 通信主题 | 发布者 (Publisher) | 订阅者 (Subscriber) | 用途 |
 | :--- | :--- | :--- | :--- |
-| `water/photo/take` | 手机客户端 | 摄像头节点群 (所有节点订阅) | 下发拍照控制指令，载荷为目标站点英文名 |
+| `water/photo/take` | 手机客户端 | 摄像头节点群 (所有节点订阅) | 下发拍照控制指令，载荷为含目标站点英文名的 JSON |
 | `water/photo/status/<station_name>` | 摄像头节点 | 手机客户端 (订阅 `water/photo/status/+`) | 回传拍摄的实时照片数据，主题末尾包含其站点英文名 |
 
 ---
@@ -47,6 +48,10 @@ graph TD
   * `site_name` (String, 必填)：目标站点英文名，如 `"dongzhan"`、`"home"`
   * `action` (String, 可选)：即时动作，`"capture"` 代表立即拍摄一张并上报
   * `motion` (String/Boolean, 可选)：异物侵入检测守护开关，`"on"` / `true`（开启突变检测并自动报警），`"off"` / `false`（关闭突变检测，保持纯静默待命）
+* **App 端当前实现**：
+  * **手动拍照**：点击「远程拍照」按钮发布 `{"site_name":"<站点名>","action":"capture"}`，15 秒超时自动解锁按钮。
+  * **定时巡视拍照**：摄像头配置页启用入侵检测后，App 前台服务按配置间隔（5~300 秒）周期发布相同 JSON 指令。
+  * `motion` 字段为预留扩展，App 端当前不发布。
 * **架构设计原则**：
   * **动作与开关彻底解耦**：移除人为定义的虚假“运行模式”；相机底色为待命，收到 `action: "capture"` 立即拍照；`motion` 纯粹作为辅助守护开关；
   * **定时职责归位 Publisher**：ESP32 摄像头节点自身无定时拍照循环。需要定时/周期性巡视照片的业务方（如手机 App 后台任务、定时服务），由其自身的定时器按周期发布 `{"site_name":"...","action":"capture"}` 指令；
@@ -77,9 +82,9 @@ flowchart TD
     Start([节点初始化]) --> SubTake[订阅主题: water/photo/take]
     SubTake --> WaitMsg{等待接收消息}
     
-    WaitMsg -- 收到消息 --> CheckPayload{比对消息载荷 Payload}
-    CheckPayload -- "Payload == 自身站点英文名" --> Capture[触发摄像头拍照并压缩为 JPG]
-    CheckPayload -- "Payload != 自身站点英文名" --> Ignore[忽略消息并保持静默]
+    WaitMsg -- 收到消息 --> CheckPayload{解析 JSON，比对 site_name 与自身站点英文名}
+    CheckPayload -- "一致 (action=capture)" --> Capture[触发摄像头拍照并压缩为 JPG]
+    CheckPayload -- "不一致" --> Ignore[忽略消息并保持静默]
     
     Capture --> PublishImage[发布图片数据至 water/photo/status/自身站点名]
     PublishImage --> WaitMsg
@@ -114,7 +119,7 @@ flowchart TD
 
 1. **手机端模拟下发拍照指令给特定站点 `dongzhan`**：
    ```bash
-   mosquitto_pub -h voicevon.vicp.io -t water/photo/take -m "dongzhan"
+   mosquitto_pub -h voicevon.vicp.io -t water/photo/take -m '{"site_name":"dongzhan","action":"capture"}'
    ```
 2. **验证摄像头节点响应**：
    * 观察 `dongzhan` 站点的摄像头是否被触发拍照。
