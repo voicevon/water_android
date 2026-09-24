@@ -2,9 +2,10 @@
 
 | 项目名称 | 传感器 MQTT 通信协议与控制逻辑规范 |
 | :--- | :--- |
-| 文档版本 | V1.0.0 |
+| 文档版本 | V1.1.0 |
 | 创建日期 | 2026-06-26 |
-| 项目状态 | 草稿 / 规划中 |
+| 最后更新 | 2026-09-20 |
+| 项目状态 | 已实现 / 维护中 |
 | 协议类型 | MQTT (Message Queuing Telemetry Transport) |
 
 ---
@@ -41,14 +42,22 @@ graph TD
 ### 3.1 启动/停止控制主题 (`water/sensor/start`)
 
 * **主题名称**：`water/sensor/start`
-* **流向**：手机客户端 $\rightarrow$ 传感器节点群 (QoS = 1)
-* **载荷格式**：纯文本字符串 (Plain Text)
-* **内容定义**：代表期望启动的**站点名称**（例如 `Station_01`）。
+* **流向**：手机客户端 $\rightarrow$ 传感器节点群 (QoS = 2)
+* **载荷格式**：JSON 字符串
+* **启动指令**：
+  ```json
+  {"name": "Station_01", "interval": 5}
+  ```
+  * `name` (String, 必填)：期望启动的传感器节点（站点）名称。
+  * `interval` (Int, 必填)：数据定时上报间隔（秒）。
+* **停止指令**：
+  ```json
+  {"command": "stop"}
+  ```
 * **逻辑说明**：
   * 系统中的**所有**传感器节点都必须在启动时订阅此主题。
-  * 节点收到该消息后，需自行比对载荷内容是否与节点自身的名称一致，并据此决定开启或关闭数据定时上报。
-
----
+  * 节点收到启动指令后，比对 `name` 是否与自身名称一致：一致则按 `interval` 开启定时数据上报；不一致则忽略。
+  * 节点收到 `command: "stop"` 指令后，无论自身名称是否被点名，都必须停止定时上报。
 
 ### 3.2 传感器数据上报主题 (`water/sensor/status`)
 
@@ -56,25 +65,34 @@ graph TD
 * **流向**：传感器节点 $\rightarrow$ 手机客户端 / 后端服务 (QoS = 0 或 1)
 * **载荷格式**：JSON 格式字符串 (JSON)
 * **内容字段定义**：
-  
+
   | 字段名 | 类型 | 说明 | 示例 |
   | :--- | :--- | :--- | :--- |
-  | `name` | String | 传感器节点（站点）的唯一名称（必填） | `"Station_01"` |
-  | `timestamp` | Long | 上报数据的时间戳（毫秒级，可选） | `1782489600000` |
-  | `ph` | Float | 污水 pH 值数值（示例，根据具体硬件配置） | `7.2` |
-  | `temperature` | Float | 污水温度数值，单位 ℃（示例，根据具体硬件配置） | `24.5` |
-  | `turbidity` | Float | 污水浊度数值，单位 NTU（示例，根据具体硬件配置） | `12.3` |
+  | `sensor1` | Int | 通道1 电容传感器原始读数（16位无符号） | `12345` |
+  | `sensor2` | Int | 通道2 电容传感器原始读数（16位无符号） | `12300` |
+  | `sensor3` | Int | 通道3 电容传感器原始读数（16位无符号） | `12200` |
+  | `state` | Int | 远端有水状态位掩码：bit0~bit2 对应通道 1~3（1 = 有水） | `5` |
+  | `ad1` | Int | HX711 通道1 24-bit 原始 AD 读数（可选，仅 HX711 设备上报） | `8100` |
+  | `ad2` | Int | HX711 通道2 24-bit 原始 AD 读数（可选） | `8050` |
+  | `ad3` | Int | HX711 通道3 24-bit 原始 AD 读数（可选） | `7990` |
 
 * **载荷 JSON 示例**：
   ```json
   {
-    "name": "Station_01",
-    "timestamp": 1782489600000,
-    "ph": 7.2,
-    "temperature": 24.5,
-    "turbidity": 12.3
+    "sensor1": 12345,
+    "sensor2": 12300,
+    "sensor3": 12200,
+    "state": 5,
+    "ad1": 8100,
+    "ad2": 8050,
+    "ad3": 7990
   }
   ```
+
+* **手机端处理逻辑**：
+  * 对每个通道独立做滑动均值滤波（窗口 50）、基准线计算（窗口 200）与施密特触发判断，得到**本地判定**状态。
+  * 解析 `state` 位掩码得到**远端上报**状态。
+  * 本地/远端双来源分别做边沿检测：无水→有水 触发告警（日志 + 系统通知 + TTS 循环播报）；有水→无水 记录恢复并解除告警。
 
 ---
 
@@ -89,12 +107,14 @@ flowchart TD
     Start([节点初始化]) --> SubStart[订阅主题: water/sensor/start]
     SubStart --> WaitMsg{等待接收消息}
     
-    WaitMsg -- 收到消息 --> CheckPayload{比对消息载荷 Payload}
-    CheckPayload -- "Payload == 自身站点名称" --> StartReport[进入 [上报状态]]
-    CheckPayload -- "Payload != 自身站点名称" --> StopReport[进入 [停止状态]]
+    WaitMsg -- 收到消息 --> CheckCmd{是否为 stop 指令?}
+    CheckCmd -- "是" --> StopReport[进入 [停止状态]]
+    CheckCmd -- "否，为启动指令" --> CheckPayload{比对 name 与自身名称}
+    CheckPayload -- "一致" --> StartReport[进入 [上报状态]]
+    CheckPayload -- "不一致" --> Ignore[忽略消息并保持静默]
     
     subgraph 上报状态
-        StartReport --> StartTimer[启动定时器]
+        StartReport --> StartTimer[按 interval 启动定时器]
         StartTimer --> SendData[定时发布数据至 water/sensor/status]
     end
     
@@ -105,18 +125,18 @@ flowchart TD
     
     SendData --> WaitMsg
     Idle --> WaitMsg
+    Ignore --> WaitMsg
 ```
 
 ### 4.2 逻辑说明
 
 1. **多路订阅与同名判定**：
    * 所有节点（如 `Station_01`, `Station_02`）在连上 MQTT Broker 后都必须订阅 `water/sensor/start`。
-   * 手机端若想开启 `Station_01` 的数据传输，会在 `water/sensor/start` 发布内容 `"Station_01"`。
+   * 手机端若想以 5 秒间隔开启 `Station_01` 的数据传输，会在 `water/sensor/start` 发布 `{"name":"Station_01","interval":5}`。
 2. **启动定时上报**：
-   * `Station_01` 接收到消息，判定 `payload == "Station_01"` 成立，启动内部定时器，以固定时间间隔（如每 5 秒）读取传感器数值，组装成包含自身名称的 JSON 报文并发布到 `water/sensor/status` 主题。
+   * `Station_01` 接收到消息，判定 `name == "Station_01"` 成立，按 `interval` 启动内部定时器，定时读取传感器数值，组装成包含三通道读数与 `state` 状态位掩码的 JSON 报文并发布到 `water/sensor/status` 主题。
 3. **停止定时上报**：
-   * 与此同时，`Station_02` 也接收到该消息，判定 `payload ("Station_01") != 自身名称 ("Station_02")`。
-   * `Station_02` 必须立即停止自身的定时上报，取消定时器，进入静默状态，从而避免多节点同时无序上报导致总线拥堵与功耗浪费。
+   * 手机端发布 `{"command":"stop"}` 后，所有节点（含 `Station_01`）必须立即停止自身的定时上报，取消定时器，进入静默状态，从而避免多节点同时无序上报导致总线拥堵与功耗浪费。
 
 ---
 
@@ -130,16 +150,21 @@ flowchart TD
    ```bash
    mosquitto_sub -h voicevon.vicp.io -t water/sensor/status -v
    ```
-2. **模拟手机端下发启动 `Station_01` 指令**：
+2. **模拟手机端下发启动 `Station_01` 指令（5 秒间隔）**：
    ```bash
-   mosquitto_pub -h voicevon.vicp.io -t water/sensor/start -m "Station_01"
+   mosquitto_pub -h voicevon.vicp.io -t water/sensor/start -m '{"name":"Station_01","interval":5}'
    ```
 3. **验证传感器节点响应**：
    * 观察是否有且仅有名称为 `"Station_01"` 的节点开始定时向 `water/sensor/status` 发布数据。
 4. **模拟手机端下发启动 `Station_02` 指令**：
    ```bash
-   mosquitto_pub -h voicevon.vicp.io -t water/sensor/start -m "Station_02"
+   mosquitto_pub -h voicevon.vicp.io -t water/sensor/start -m '{"name":"Station_02","interval":5}'
    ```
 5. **验证切换行为**：
    * 观察 `Station_01` 是否停止发送数据。
    * 观察 `Station_02` 是否开始定时向 `water/sensor/status` 发送数据。
+6. **模拟手机端下发全局停止指令**：
+   ```bash
+   mosquitto_pub -h voicevon.vicp.io -t water/sensor/start -m '{"command":"stop"}'
+   ```
+   * 观察所有节点均停止发送数据。

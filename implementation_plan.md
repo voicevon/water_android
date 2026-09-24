@@ -110,9 +110,10 @@ This plan details the technical approach to solve Android MQTT disconnection dur
 
 > [!IMPORTANT]
 > - **Battery Usage**: This implementation requests permission to ignore battery optimizations and holds a `PARTIAL_WAKE_LOCK` + `WifiLock` in a Foreground Service. This will slightly increase power consumption when the app is in the background, as requested.
-> - **MQTT Retained Alarm Clear Protocol**:
->   - ESP32 publishes alarm with `retained = true`, QoS = 1.
->   - When Android receives and handles the alarm, Android will automatically (or via user interaction) publish a retained message with payload `""` or `{"alarm": false}` and `retained = true` to clear the retained state on the MQTT Broker.
+> - **MQTT Retained Alarm Protocol (as implemented)**:
+>   - ESP32 publishes alarms with `retained = true`, QoS = 1 to `water/{station}/alarm`.
+>   - Android **only subscribes** to that topic. A non-empty retained payload (including broker re-delivery after reconnect) triggers a "断线期间告警补发" notification; an empty payload means ESP32 has cleared the alarm.
+>   - The in-app「消除警报」button clears local alarm state, TTS loop and notifications only — it does **not** publish any MQTT message.
 
 ## Proposed Changes
 
@@ -127,10 +128,10 @@ This plan details the technical approach to solve Android MQTT disconnection dur
 #### [MODIFY] [MqttService.kt](file:///d:/Software/antigravity/water_android/app/src/main/java/com/water/von/service/MqttService.kt)
 - **Foreground Service**: Ensure service runs as Foreground Service with persistent notification channel (`startForeground`).
 - **Locks**: Acquire `PowerManager.PARTIAL_WAKE_LOCK` and `WifiManager.WIFI_MODE_FULL_HIGH_PERF` lock while service is running.
-- **Heartbeat / Doze Alarm**: Use `AlarmManager.setExactAndAllowWhileIdle()` to send periodic MQTT Ping requests when running in background/Doze mode.
-- **Retained Message Handling & Clearance**:
-  - When an alarm topic message is received, trigger notification/alarm ring.
-  - Send an MQTT publish back to the alarm topic with `retained = true` and payload `""` / `{"alarm": false}` to overwrite and clear the retained message on the broker.
+- **Heartbeat / Doze Alarm (as implemented)**: Use `AlarmManager.setExactAndAllowWhileIdle()` every 8 minutes (system enforces ≥9 min on Android 9+) to run a **connectivity check**: if MQTT is disconnected, trigger reconnect. MQTT KeepAlive is set to 20 s.
+- **Retained Message Handling**:
+  - Subscribe to `water/{station}/alarm`; non-empty retained payload → "断线期间告警补发" high-priority notification; empty payload → alarm cleared by ESP32.
+  - In-app alarm clearing (TTS stop + notification cancel) is local-only; no publish-back.
 
 #### [MODIFY] [MainActivity.kt](file:///d:/Software/antigravity/water_android/app/src/main/java/com/water/von/MainActivity.kt)
 - Check `PowerManager.isIgnoringBatteryOptimizations()`. If false, display a dialog prompting the user to grant "Ignore Battery Optimizations".
@@ -139,10 +140,10 @@ This plan details the technical approach to solve Android MQTT disconnection dur
 ## Verification Plan
 
 ### Manual Verification
-1. **Retained Message Clear Verification**:
-   - Trigger alarm on ESP32 or MQTT client with `retained = true`.
-   - Connect Android MQTT service; verify notification is received.
-   - Verify Android publishes a blank retained message back to the topic to clear it from Broker.
+1. **Retained Message Verification**:
+   - Trigger alarm on ESP32 or MQTT client with `retained = true` on `water/{station}/alarm`.
+   - Connect Android MQTT service; verify the "断线期间告警补发" notification is received.
+   - Publish a blank retained payload to the topic; verify Android logs "告警已清除" without notifying.
 2. **Background / Sleep Verification**:
    - Turn off screen and let phone enter Doze mode / sleep for > 15 minutes.
    - Send an alarm via ESP32 / MQTT broker.
