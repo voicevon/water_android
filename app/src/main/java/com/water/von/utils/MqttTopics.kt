@@ -26,7 +26,4 @@ object MqttTopics {
     const val CONTROL_TAKE_PHOTO = "water/photo/take"
     const val SENSOR_CONTROL_TOPIC = "water/sensor/start"
     const val SENSOR_CALIBRATION_TOPIC = "water/sensor/calibration"
-
-    fun getDurationTopic(channelId: Int): String = "$PREFIX/config/duration/$channelId"
-    fun getPumpTimeTopic(channelId: Int): String = "$PREFIX/config/pump_time/$channelId"
 }

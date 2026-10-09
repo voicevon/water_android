@@ -21,6 +21,7 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -328,18 +329,48 @@ fun SensorDebugScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(bottom = 16.dp),
-                            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+                            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp)
                         ) {
-                            Row(
+                            Column(
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .padding(8.dp),
-                                horizontalArrangement = Arrangement.SpaceBetween
+                                    .padding(10.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp)
                             ) {
-                                ChannelValue("原始值", latestPoint.ch0, Color(0xFFD4AF37)) // Dark Yellow / Gold
-                                ChannelValue("滤波值", latestPoint.ch1, Color(0xFF4CAF50)) // Green
-                                ChannelValue("基准线", latestPoint.ch2, Color(0xFF2196F3)) // Blue
-                                ChannelValue("触发阈值", latestPoint.ch3, Color.Red)
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    ChannelValueCard(
+                                        label = "原始值",
+                                        value = latestPoint.ch0,
+                                        color = Color(0xFFD4AF37),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    ChannelValueCard(
+                                        label = "滤波值",
+                                        value = latestPoint.ch1,
+                                        color = Color(0xFF4CAF50),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                                ) {
+                                    ChannelValueCard(
+                                        label = "基准线",
+                                        value = latestPoint.ch2,
+                                        color = Color(0xFF2196F3),
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    ChannelValueCard(
+                                        label = "触发阈值",
+                                        value = latestPoint.ch3,
+                                        color = Color.Red,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                }
                             }
                         }
 
@@ -430,7 +461,7 @@ fun SensorDebugScreen(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = "$rxCount",
+                                    text = String.format(java.util.Locale.US, "%,d", rxCount),
                                     fontSize = 12.sp,
                                     fontWeight = FontWeight.Bold,
                                     color = MaterialTheme.colorScheme.primary
@@ -547,10 +578,38 @@ fun SensorDebugScreen(
 }
 
 @Composable
-fun ChannelValue(label: String, value: Int, color: Color) {
-    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        Text(text = label, fontWeight = FontWeight.Bold, color = color, fontSize = 10.sp)
-        Text(text = value.toString(), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+fun ChannelValueCard(
+    label: String,
+    value: Int,
+    color: Color,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        color = color.copy(alpha = 0.08f),
+        shape = RoundedCornerShape(8.dp),
+        border = androidx.compose.foundation.BorderStroke(1.dp, color.copy(alpha = 0.25f))
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = label,
+                fontWeight = FontWeight.Bold,
+                color = color,
+                fontSize = 11.sp
+            )
+            Spacer(modifier = Modifier.height(2.dp))
+            Text(
+                text = String.format(java.util.Locale.US, "%,d", value),
+                fontSize = 15.sp,
+                fontWeight = FontWeight.Bold,
+                fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
+                maxLines = 1,
+                softWrap = false
+            )
+        }
     }
 }
 
@@ -628,7 +687,7 @@ fun ParametersPanel(context: Context, sp: android.content.SharedPreferences) {
                         }
                         
                         Text(
-                            text = "$offsetValue",
+                            text = String.format(java.util.Locale.US, "%,d", offsetValue),
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             modifier = Modifier.padding(horizontal = 12.dp)

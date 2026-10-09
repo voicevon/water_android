@@ -15,7 +15,6 @@ import androidx.compose.ui.unit.sp
 import com.water.von.ui.screens.ConfigScreen
 import com.water.von.ui.screens.LogsScreen
 import com.water.von.ui.screens.MonitorScreen
-import com.water.von.ui.screens.SettingsScreen
 import com.water.von.MainActivity
 import com.water.von.ui.screens.SensorDebugScreen
 import com.water.von.ui.screens.NetworkLogsScreen
@@ -23,16 +22,23 @@ import com.water.von.ui.screens.StationSettingsScreen
 import com.water.von.ui.screens.CameraSettingsScreen
 import com.water.von.ui.screens.Hx711ConfigScreen
 
+private const val TAB_MONITOR = 0
+private const val TAB_LOGS = 1
+private const val TAB_CONFIG = 2
+private const val TAB_NETWORK_LOGS = 3
+private const val TAB_STATION_SETTINGS = 4
+private const val TAB_CAMERA_SETTINGS = 5
+
 /**
  * 主容器页面 MainScreen
- * 整合底部导航栏，控制 4 个核心功能页 of 视图切换
+ * 整合底部导航栏，控制核心功能页之视图切换
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MainScreen(modifier: Modifier = Modifier) {
     val configuration = LocalConfiguration.current
     val isLandscape = configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
-    var selectedTab by remember { mutableStateOf(0) }
+    var selectedTab by remember { mutableStateOf(TAB_MONITOR) }
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showSensorDebugWindow by remember { mutableStateOf(MainActivity.showSensorDebugOnLaunch) }
@@ -111,28 +117,28 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             text = { Text("云端配置") },
                             onClick = {
                                 showMenu = false
-                                selectedTab = 3
+                                selectedTab = TAB_CONFIG
                             }
                         )
                         DropdownMenuItem(
                             text = { Text("本地配置") },
                             onClick = {
                                 showMenu = false
-                                selectedTab = 5
+                                selectedTab = TAB_STATION_SETTINGS
                             }
                         )
                         DropdownMenuItem(
                             text = { Text("网络诊断日志") },
                             onClick = {
                                 showMenu = false
-                                selectedTab = 4
+                                selectedTab = TAB_NETWORK_LOGS
                             }
                         )
                         DropdownMenuItem(
                             text = { Text("摄像头配置") },
                             onClick = {
                                 showMenu = false
-                                selectedTab = 6
+                                selectedTab = TAB_CAMERA_SETTINGS
                             }
                         )
                         DropdownMenuItem(
@@ -164,20 +170,14 @@ fun MainScreen(modifier: Modifier = Modifier) {
             if (!isLandscape) {
                 NavigationBar {
                     NavigationBarItem(
-                        selected = selectedTab == 0,
-                        onClick = { selectedTab = 0 },
+                        selected = selectedTab == TAB_MONITOR,
+                        onClick = { selectedTab = TAB_MONITOR },
                         icon = { Text("📊", style = MaterialTheme.typography.titleLarge) },
                         label = { Text("监控", fontWeight = FontWeight.Bold) }
                     )
                     NavigationBarItem(
-                        selected = selectedTab == 1,
-                        onClick = { selectedTab = 1 },
-                        icon = { Text("🎛️", style = MaterialTheme.typography.titleLarge) },
-                        label = { Text("设定", fontWeight = FontWeight.Bold) }
-                    )
-                    NavigationBarItem(
-                        selected = selectedTab == 2,
-                        onClick = { selectedTab = 2 },
+                        selected = selectedTab == TAB_LOGS,
+                        onClick = { selectedTab = TAB_LOGS },
                         icon = { Text("📂", style = MaterialTheme.typography.titleLarge) },
                         label = { Text("日志", fontWeight = FontWeight.Bold) }
                     )
@@ -211,69 +211,45 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { selectedTab = 0 }
+                                .clickable { selectedTab = TAB_MONITOR }
                                 .padding(vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = "📊",
                                 fontSize = 20.sp,
-                                color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else Color.Gray
+                                color = if (selectedTab == TAB_MONITOR) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "监控",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == 0) MaterialTheme.colorScheme.primary else Color.Gray
+                                color = if (selectedTab == TAB_MONITOR) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                         }
 
                         Spacer(modifier = Modifier.height(16.dp))
 
-                        // Tab 2: 设定
+                        // Tab 2: 日志
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { selectedTab = 1 }
-                                .padding(vertical = 10.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally
-                        ) {
-                            Text(
-                                text = "🎛️",
-                                fontSize = 20.sp,
-                                color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
-                            Spacer(modifier = Modifier.height(2.dp))
-                            Text(
-                                text = "设定",
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == 1) MaterialTheme.colorScheme.primary else Color.Gray
-                            )
-                        }
-
-                        Spacer(modifier = Modifier.height(16.dp))
-
-                        // Tab 3: 日志
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { selectedTab = 2 }
+                                .clickable { selectedTab = TAB_LOGS }
                                 .padding(vertical = 10.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = "📂",
                                 fontSize = 20.sp,
-                                color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else Color.Gray
+                                color = if (selectedTab == TAB_LOGS) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                             Spacer(modifier = Modifier.height(2.dp))
                             Text(
                                 text = "日志",
                                 fontSize = 10.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (selectedTab == 2) MaterialTheme.colorScheme.primary else Color.Gray
+                                color = if (selectedTab == TAB_LOGS) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                         }
 
@@ -293,13 +269,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 color = MaterialTheme.colorScheme.background
             ) {
                 when (selectedTab) {
-                    0 -> MonitorScreen()
-                    1 -> SettingsScreen()
-                    2 -> LogsScreen()
-                    3 -> ConfigScreen()
-                    4 -> NetworkLogsScreen()
-                    5 -> StationSettingsScreen()
-                    6 -> CameraSettingsScreen()
+                    TAB_MONITOR -> MonitorScreen()
+                    TAB_LOGS -> LogsScreen()
+                    TAB_CONFIG -> ConfigScreen()
+                    TAB_NETWORK_LOGS -> NetworkLogsScreen()
+                    TAB_STATION_SETTINGS -> StationSettingsScreen()
+                    TAB_CAMERA_SETTINGS -> CameraSettingsScreen()
                 }
             }
         }

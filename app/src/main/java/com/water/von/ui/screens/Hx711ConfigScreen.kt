@@ -620,7 +620,7 @@ fun ChannelCalibrationCard(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = String.format("%.1f g", currentForceGrams),
+                                    text = String.format(java.util.Locale.US, "%,.1f g", currentForceGrams),
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     color = MaterialTheme.colorScheme.primary,
@@ -642,7 +642,7 @@ fun ChannelCalibrationCard(
                                     .padding(horizontal = 10.dp, vertical = 8.dp)
                             ) {
                                 Text(
-                                    text = "原始 AD 码值 (16-bit)",
+                                    text = "原始 AD 码值 (24-bit)",
                                     fontSize = 11.sp,
                                     fontWeight = FontWeight.Medium,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -651,11 +651,11 @@ fun ChannelCalibrationCard(
                                 )
                                 Spacer(modifier = Modifier.height(2.dp))
                                 Text(
-                                    text = if (currentAdRaw > 0) currentAdRaw.toString() else "--",
+                                    text = if (currentAdRaw != 0) String.format(java.util.Locale.US, "%,d", currentAdRaw) else "--",
                                     fontSize = 20.sp,
                                     fontWeight = FontWeight.ExtraBold,
                                     fontFamily = androidx.compose.ui.text.font.FontFamily.Monospace,
-                                    color = if (currentAdRaw > 0) Color(0xFFD84315) else Color.Gray,
+                                    color = if (currentAdRaw != 0) Color(0xFFD84315) else Color.Gray,
                                     maxLines = 1,
                                     softWrap = false
                                 )

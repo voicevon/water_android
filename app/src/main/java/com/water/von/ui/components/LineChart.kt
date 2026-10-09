@@ -58,7 +58,7 @@ fun MultiLineChart(
         val width = size.width
         val height = size.height
 
-        val paddingStart = 100f
+        val paddingStart = 175f
         val paddingEnd = 20f
         val paddingTop = 40f
         val paddingBottom = 60f
@@ -70,8 +70,9 @@ fun MultiLineChart(
         drawIntoCanvas { canvas ->
             val paint = Paint().apply {
                 color = android.graphics.Color.GRAY
-                textSize = 30f
+                textSize = 26f
                 typeface = Typeface.DEFAULT
+                textAlign = Paint.Align.RIGHT
             }
             val gridPaint = androidx.compose.ui.graphics.Paint().apply {
                 color = Color.LightGray
@@ -91,11 +92,12 @@ fun MultiLineChart(
                     gridPaint
                 )
 
-                // Label
+                // Label formatted with thousands comma, right-aligned to left of grid
+                val labelText = String.format(java.util.Locale.US, "%,.0f", yVal)
                 canvas.nativeCanvas.drawText(
-                    String.format("%.0f", yVal),
-                    10f,
-                    yPos + 10f,
+                    labelText,
+                    paddingStart - 12f,
+                    yPos + 9f,
                     paint
                 )
             }
