@@ -1261,23 +1261,35 @@ class MqttService : Service() {
             override fun onScanResult(callbackType: Int, result: ScanResult?) {
                 super.onScanResult(callbackType, result)
                 result?.scanRecord?.getManufacturerSpecificData(0xFFFF)?.let { data ->
-                    if (data.size >= 8) {
-                        val sensor1 = ((data[0].toInt() and 0xFF) shl 8) or (data[1].toInt() and 0xFF)
-                        val sensor2 = ((data[2].toInt() and 0xFF) shl 8) or (data[3].toInt() and 0xFF)
-                        val sensor3 = ((data[4].toInt() and 0xFF) shl 8) or (data[5].toInt() and 0xFF)
+                    if (data.size < 11) return@let
+
+                    // 24位有符号原生直通协议 (大端序 + 符号位扩展)
+                    fun parseInt24BE(b0: Byte, b1: Byte, b2: Byte): Int {
+                        var raw = ((b0.toInt() and 0xFF) shl 16) or
+                                  ((b1.toInt() and 0xFF) shl 8) or
+                                  (b2.toInt() and 0xFF)
+                        if ((raw and 0x800000) != 0) {
+                            raw = raw or -0x1000000
+                        }
+                        return raw
+                    }
+
+                    val sensor1 = parseInt24BE(data[0], data[1], data[2])
+                    val sensor2 = parseInt24BE(data[3], data[4], data[5])
+                    val sensor3 = parseInt24BE(data[6], data[7], data[8])
+                    val stateByte = data[9].toInt() and 0xFF
+                    val seqNum = data[10].toInt() and 0xFF
+
+                    if (seqNum != bleLastSeqNum) {
+                        bleLastSeqNum = seqNum
                         
-                        val stateByte = data[6].toInt() and 0xFF
-                        val seqNum = data[7].toInt() and 0xFF
-                        if (seqNum != bleLastSeqNum) {
-                            bleLastSeqNum = seqNum
-                            
-                            // 重置 15 分钟无数据超时定时器
-                            resetBleTimeoutTimer()
+                        // 重置 15 分钟无数据超时定时器
+                        resetBleTimeoutTimer()
 
-                            // 更新全局 Flow 让 UI 实时消费
-                            _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, stateByte)
+                        // 更新全局 Flow 让 UI 实时消费
+                        _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, stateByte)
 
-                            _debugPacketCountBle.value++
+                        _debugPacketCountBle.value++
 
                             // 后台逻辑处理：使用 BLE 专属通道处理器进行滤波与触发状态机计算
                             val physicalChannels = arrayOf(sensor1, sensor2, sensor3)
@@ -1351,7 +1363,6 @@ class MqttService : Service() {
                         }
                     }
                 }
-            }
 
             override fun onScanFailed(errorCode: Int) {
                 super.onScanFailed(errorCode)

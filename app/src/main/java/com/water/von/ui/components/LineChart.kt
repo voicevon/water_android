@@ -50,9 +50,9 @@ fun MultiLineChart(
     // Add 10% padding to top and bottom to avoid lines touching the edges of the chart area
     val padding = if (diff > 0f) diff * 0.1f else 10f
 
-    val yMin = max(0f, rawMin - padding)
+    val yMin = rawMin - padding
     val yMax = rawMax + padding
-    val yRange = yMax - yMin
+    val yRange = if (yMax > yMin) yMax - yMin else 1f
 
     Canvas(modifier = modifier.fillMaxSize()) {
         val width = size.width
