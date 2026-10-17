@@ -58,12 +58,15 @@ fun Hx711ConfigScreen(
     val rawSensorData by MqttService.latestSensorRawData.collectAsState()
     val rawSensorAdData by MqttService.latestSensorAdData.collectAsState()
     val latestCalStatus by MqttService.latestCalibrationStatus.collectAsState()
+    val latestControlResponse by MqttService.latestControlResponse.collectAsState()
 
     // 实时高频数据流激活状态（water/sensor/start）
     var isDataStreamActive by remember { mutableStateOf(false) }
 
-    // 读取状态机
+    // 读取与复位状态机
     var isReading by remember { mutableStateOf(false) }
+    var isRebooting by remember { mutableStateOf(false) }
+    var showRebootDialog by remember { mutableStateOf(false) }
     var readStatusText by remember { mutableStateOf<String?>(null) }
     var readStatusColor by remember { mutableStateOf(Color.Gray) }
 
@@ -153,12 +156,72 @@ fun Hx711ConfigScreen(
         }
     }
 
+    // 主动向指定传感器节点发送远程复位指令并启动 15 秒超时监听
+    fun requestSensorReboot() {
+        if (!isMqttConnected) {
+            Toast.makeText(context, "MQTT 未连接，无法下发复位指令", Toast.LENGTH_SHORT).show()
+            readStatusText = "⚠️ MQTT 未连接"
+            readStatusColor = Color.Red
+            return
+        }
+
+        val targetStation = detectedSensorDeviceName ?: MqttService.stationEnglishName.value
+        val cmdId = System.currentTimeMillis().toString()
+        val rebootJson = JSONObject().apply {
+            put("cmd_id", cmdId)
+            put("target", "sensor")
+            put("action", "restart")
+        }
+        val topic = MqttTopics.getControlTopic(targetStation)
+        MqttService.publish(context, topic, rebootJson.toString())
+        isRebooting = true
+        readStatusText = "⏳ 已向 [$targetStation] 下发复位指令，等待设备受理..."
+        readStatusColor = themePrimary
+        Toast.makeText(context, "已发送远程复位指令", Toast.LENGTH_SHORT).show()
+
+        // 启动 15 秒超时检测协程
+        coroutineScope.launch {
+            delay(15000)
+            if (isRebooting) {
+                isRebooting = false
+                readStatusText = "⚠️ 重启响应超时 (15s 未收到上线就绪通知)"
+                readStatusColor = Color(0xFFD32F2F)
+                Toast.makeText(context, "重启超时：未收到设备就绪通知", Toast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     // 进入页面时主动订阅主题并触发一次读取
     LaunchedEffect(Unit) {
+        val targetStation = detectedSensorDeviceName ?: MqttService.stationEnglishName.value
         MqttService.subscribe(context, MqttTopics.SENSOR_CALIBRATION_STATUS_TOPIC)
         MqttService.subscribe(context, MqttTopics.SENSOR_STATUS_TOPIC)
+        MqttService.subscribe(context, MqttTopics.getControlResponseTopic(targetStation))
+        MqttService.subscribe(context, "water/+/control/response")
         if (isMqttConnected) {
             queryCurrentCalibration()
+        }
+    }
+
+    // 监听统一控制平面响应（ACK / Boot 就绪）
+    LaunchedEffect(latestControlResponse) {
+        latestControlResponse?.let { resp ->
+            if (resp.from == "sensor") {
+                if (resp.status == "accept" && resp.event == "restarting") {
+                    readStatusText = "⏳ 节点已受理复位，正在执行重启（约 10 秒后就绪）..."
+                    readStatusColor = Color(0xFFFF9800)
+                    Toast.makeText(context, "设备已确认正在重启...", Toast.LENGTH_SHORT).show()
+                } else if (resp.event == "online") {
+                    if (isRebooting) {
+                        isRebooting = false
+                        readStatusText = "✅ 传感器节点重启成功，已重新上线并就绪！"
+                        readStatusColor = Color(0xFF2E7D32)
+                        Toast.makeText(context, "🎉 传感器节点已重启成功并恢复在线！", Toast.LENGTH_SHORT).show()
+                        // 重新查询一次参数
+                        queryCurrentCalibration()
+                    }
+                }
+            }
         }
     }
 
@@ -402,7 +465,7 @@ fun Hx711ConfigScreen(
                     ) {
                         Row(
                             modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             // 读取设备参数按钮
@@ -413,13 +476,13 @@ fun Hx711ConfigScreen(
                                     contentColor = MaterialTheme.colorScheme.onPrimary
                                 ),
                                 shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                modifier = Modifier.height(36.dp),
-                                enabled = !isReading
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                enabled = !isReading && !isRebooting
                             ) {
                                 Text(
-                                    text = if (isReading) "⏳ 读取中..." else "🔄 读取参数",
-                                    fontSize = 12.sp,
+                                    text = if (isReading) "⏳ 读取中" else "🔄 读取参数",
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     softWrap = false
@@ -434,12 +497,34 @@ fun Hx711ConfigScreen(
                                     contentColor = if (isDataStreamActive) MaterialTheme.colorScheme.onError else MaterialTheme.colorScheme.onSecondary
                                 ),
                                 shape = RoundedCornerShape(8.dp),
-                                contentPadding = PaddingValues(horizontal = 10.dp, vertical = 6.dp),
-                                modifier = Modifier.height(36.dp)
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                enabled = !isRebooting
                             ) {
                                 Text(
-                                    text = if (isDataStreamActive) "⏹ 停止实时流" else "▶ 开启实时流",
-                                    fontSize = 12.sp,
+                                    text = if (isDataStreamActive) "⏹ 停止流" else "▶ 实时流",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 1,
+                                    softWrap = false
+                                )
+                            }
+
+                            // 远程复位重启按钮
+                            Button(
+                                onClick = { showRebootDialog = true },
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = Color(0xFFE65100),
+                                    contentColor = Color.White
+                                ),
+                                shape = RoundedCornerShape(8.dp),
+                                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 6.dp),
+                                modifier = Modifier.weight(1f).height(36.dp),
+                                enabled = !isRebooting
+                            ) {
+                                Text(
+                                    text = if (isRebooting) "⏳ 重启中" else "⚡ 远程重启",
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.Bold,
                                     maxLines = 1,
                                     softWrap = false
@@ -457,6 +542,34 @@ fun Hx711ConfigScreen(
                             )
                         }
                     }
+                }
+
+                // 远程重启二次确认弹窗
+                if (showRebootDialog) {
+                    val targetDev = detectedSensorDeviceName ?: MqttService.stationEnglishName.value
+                    AlertDialog(
+                        onDismissRequest = { showRebootDialog = false },
+                        title = { Text("确认远程重启？", fontWeight = FontWeight.Bold) },
+                        text = {
+                            Text("即将向传感器节点 [$targetDev] 下发复位指令。\n\n设备收到后将短暂断开连接，并在约 10 秒后自动重新上线。期间数据流将短暂中断。")
+                        },
+                        confirmButton = {
+                            Button(
+                                onClick = {
+                                    showRebootDialog = false
+                                    requestSensorReboot()
+                                },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("立即重启")
+                            }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { showRebootDialog = false }) {
+                                Text("取消")
+                            }
+                        }
+                    )
                 }
 
                 // 通道 1 标定卡片

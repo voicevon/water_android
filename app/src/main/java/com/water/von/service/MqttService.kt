@@ -259,6 +259,20 @@ class MqttService : Service() {
         private val _latestCalibrationStatus = MutableStateFlow<List<Hx711ChannelCalibration>?>(null)
         val latestCalibrationStatus: StateFlow<List<Hx711ChannelCalibration>?> = _latestCalibrationStatus.asStateFlow()
 
+        // 统一控制平面响应数据结构
+        data class ControlResponse(
+            val cmdId: String,
+            val from: String,
+            val action: String,
+            val status: String,
+            val event: String,
+            val name: String,
+            val msg: String = ""
+        )
+
+        private val _latestControlResponse = MutableStateFlow<ControlResponse?>(null)
+        val latestControlResponse: StateFlow<ControlResponse?> = _latestControlResponse.asStateFlow()
+
         private val _detectedSensorDeviceName = MutableStateFlow<String?>("home")
         val detectedSensorDeviceName: StateFlow<String?> = _detectedSensorDeviceName.asStateFlow()
 
@@ -841,9 +855,11 @@ class MqttService : Service() {
             mqttClient?.subscribe(MqttTopics.SYSTEM_STATE, 1) // 订阅全新的结构化流程状态主题
             mqttClient?.subscribe(MqttTopics.SENSOR_STATUS_TOPIC, 1) // 订阅全局水传感器上报数据主题
             mqttClient?.subscribe(MqttTopics.SENSOR_CALIBRATION_STATUS_TOPIC, 1) // 订阅 HX711 标定状态主题
+            mqttClient?.subscribe(MqttTopics.CONTROL_RESPONSE_TOPIC, 1) // 订阅当前站点控制平面响应主题
+            mqttClient?.subscribe("water/+/control/response", 1) // 订阅所有站点控制平面响应（通配符）
             // 告警专用 Retained Topic：重连后 Broker 会立即补发未清除的告警，实现断线期间告警零丢失
             mqttClient?.subscribe("${MqttTopics.PREFIX}/alarm", 1)
-            addConsoleLog("已成功订阅监控主题队列（含 Retained 告警主题）")
+            addConsoleLog("已成功订阅监控与控制主题队列（含 Retained 告警与 Control Response）")
         } catch (e: Exception) {
             addConsoleLog("订阅主题失败: ${e.message}")
         }
@@ -1123,6 +1139,25 @@ class MqttService : Service() {
                 } else {
                     // 收到空 payload：ESP32 已主动清除告警保留状态，告警已解除
                     addConsoleLog("Retained 告警已由 ESP32 清除（告警状态已恢复）")
+                }
+            }
+            topic.endsWith("/control/response") -> {
+                try {
+                    val jsonStr = String(payloadBytes, Charsets.UTF_8)
+                    val json = org.json.JSONObject(jsonStr)
+                    val resp = ControlResponse(
+                        cmdId = json.optString("cmd_id", ""),
+                        from = json.optString("from", ""),
+                        action = json.optString("action", ""),
+                        status = json.optString("status", ""),
+                        event = json.optString("event", ""),
+                        name = json.optString("name", ""),
+                        msg = json.optString("msg", "")
+                    )
+                    _latestControlResponse.value = resp
+                    addConsoleLog("收到控制响应: from=${resp.from}, action=${resp.action}, status=${resp.status}, event=${resp.event}")
+                } catch (e: Exception) {
+                    Log.e(TAG, "解析控制响应失败: ${e.message}", e)
                 }
             }
         }
