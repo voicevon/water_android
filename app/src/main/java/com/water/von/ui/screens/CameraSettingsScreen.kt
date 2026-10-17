@@ -16,9 +16,11 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.Color
 import com.water.von.detection.MutationDetector
 import com.water.von.service.MqttService
 import com.water.von.utils.MqttTopics
+import kotlinx.coroutines.launch
 
 /**
  * 摄像头巡视配置页面 CameraSettingsScreen
@@ -37,12 +39,21 @@ import com.water.von.utils.MqttTopics
 @Composable
 fun CameraSettingsScreen() {
     val context = LocalContext.current
+    val sp = remember { context.getSharedPreferences("mqtt_debug_config", Context.MODE_PRIVATE) }
 
     // ── 配置状态（与 ESP32 默认值一致）─────────────────────────────
     var mutEnable       by remember { mutableStateOf(true) }
     var intervalSec     by remember { mutableStateOf(10)   }    // 5 ~ 300 秒
     var blockThreshPct  by remember { mutableStateOf(15)   }    // 5 ~ 50（对应 0.05~0.50）
     var minBlocks       by remember { mutableStateOf(3)    }    // 1 ~ 32
+
+    // ── MQTT 连接与控制平面状态 ───────────────────────────────────
+    val isMqttConnected by MqttService.isConnected.collectAsState()
+    val latestControlResponse by MqttService.latestControlResponse.collectAsState()
+    var showRebootDialog by remember { mutableStateOf(false) }
+    var isRebooting by remember { mutableStateOf(false) }
+    var rebootStatusText by remember { mutableStateOf<String?>(null) }
+    val coroutineScope = rememberCoroutineScope()
 
     // ── 首次进入加载已保存配置 ────────────────────────────────────
     LaunchedEffect(Unit) {
@@ -51,6 +62,24 @@ fun CameraSettingsScreen() {
         intervalSec    = sp.getInt("mut_interval_sec",     10)
         blockThreshPct = sp.getInt("mut_block_thresh_pct", 15)
         minBlocks      = sp.getInt("mut_min_blocks",       3)
+    }
+
+    // ── 监听相机控制平面响应 ──────────────────────────────────────
+    LaunchedEffect(latestControlResponse) {
+        latestControlResponse?.let { resp ->
+            if (resp.from == "camera") {
+                if (resp.status == "accept" && resp.event == "restarting") {
+                    rebootStatusText = "⏳ 相机已受理复位，正在重启（约 10 秒后就绪）..."
+                    Toast.makeText(context, "相机已确认正在重启...", Toast.LENGTH_SHORT).show()
+                } else if (resp.event == "online") {
+                    if (isRebooting) {
+                        isRebooting = false
+                        rebootStatusText = "✅ 相机节点重启成功，已重新上线并就绪！"
+                        Toast.makeText(context, "🎉 相机节点已重启成功并恢复在线！", Toast.LENGTH_SHORT).show()
+                    }
+                }
+            }
+        }
     }
 
     Column(
@@ -328,6 +357,106 @@ fun CameraSettingsScreen() {
             shape = RoundedCornerShape(8.dp)
         ) {
             Text("保存配置并同步下发至相机", fontWeight = FontWeight.Bold, fontSize = 16.sp)
+        }
+
+        Spacer(modifier = Modifier.height(4.dp))
+
+        // ── 节点远程重启维护卡片 ─────────────────────────────────
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("🛠️ 硬件维护与控制", fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                Text(
+                    text = "如摄像头出现画面异常或通信卡顿，可通过统一控制平面远程复位 ESP32-CAM 节点。",
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                Button(
+                    onClick = { showRebootDialog = true },
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFFE65100),
+                        contentColor = Color.White
+                    ),
+                    shape = RoundedCornerShape(8.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(42.dp),
+                    enabled = !isRebooting
+                ) {
+                    Text(
+                        text = if (isRebooting) "⏳ 相机重启中..." else "⚡ 远程重启摄像头",
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 14.sp
+                    )
+                }
+
+                rebootStatusText?.let { txt ->
+                    Text(
+                        text = txt,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = MaterialTheme.colorScheme.primary
+                    )
+                }
+            }
+        }
+
+        if (showRebootDialog) {
+            val stationName = MqttService.stationEnglishName.value
+            AlertDialog(
+                onDismissRequest = { showRebootDialog = false },
+                title = { Text("确认远程重启摄像头？", fontWeight = FontWeight.Bold) },
+                text = {
+                    Text("即将向站点 [$stationName] 下发指令重启 ESP32-CAM 摄像头。\n\n相机将短暂离线并在约 10 秒后自动重新上线。")
+                },
+                confirmButton = {
+                    Button(
+                        onClick = {
+                            showRebootDialog = false
+                            if (!isMqttConnected) {
+                                Toast.makeText(context, "MQTT 未连接", Toast.LENGTH_SHORT).show()
+                                return@Button
+                            }
+                            isRebooting = true
+                            rebootStatusText = "⏳ 正在发送复位指令..."
+                            val cmdId = System.currentTimeMillis().toString()
+                            val json = org.json.JSONObject().apply {
+                                put("cmd_id", cmdId)
+                                put("target", "camera")
+                                put("action", "restart")
+                            }
+                            val topic = MqttTopics.getControlTopic(stationName)
+                            MqttService.publish(context, topic, json.toString())
+                            Toast.makeText(context, "已发送摄像头复位指令", Toast.LENGTH_SHORT).show()
+
+                            coroutineScope.launch {
+                                kotlinx.coroutines.delay(15000)
+                                if (isRebooting) {
+                                    isRebooting = false
+                                    rebootStatusText = "⚠️ 重启响应超时 (15s 未收到上线通知)"
+                                    Toast.makeText(context, "重启超时", Toast.LENGTH_SHORT).show()
+                                }
+                            }
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                    ) {
+                        Text("立即重启")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRebootDialog = false }) {
+                        Text("取消")
+                    }
+                }
+            )
         }
     }
 }
