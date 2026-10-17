@@ -933,12 +933,10 @@ class MqttService : Service() {
                     
                     _latestSensorRawData.value = intArrayOf(ch1, ch2, ch3, stateByte)
                     
-                    if (json.has("ad1")) {
-                        val ad1 = json.optInt("ad1", 0)
-                        val ad2 = json.optInt("ad2", 0)
-                        val ad3 = json.optInt("ad3", 0)
-                        _latestSensorAdData.value = intArrayOf(ad1, ad2, ad3)
-                    }
+                    val ad1 = json.optInt("ad1", ch1)
+                    val ad2 = json.optInt("ad2", ch2)
+                    val ad3 = json.optInt("ad3", ch3)
+                    _latestSensorAdData.value = intArrayOf(ad1, ad2, ad3)
                         
                         if (_isMqttDebuggingActive.value) {
                             _debugPacketCount.value++
@@ -1323,6 +1321,7 @@ class MqttService : Service() {
 
                         // 更新全局 Flow 让 UI 实时消费
                         _latestSensorRawData.value = intArrayOf(sensor1, sensor2, sensor3, stateByte)
+                        _latestSensorAdData.value = intArrayOf(sensor1, sensor2, sensor3)
 
                         _debugPacketCountBle.value++
 

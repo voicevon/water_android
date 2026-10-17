@@ -20,18 +20,20 @@ import com.water.von.ui.screens.SensorDebugScreen
 import com.water.von.ui.screens.NetworkLogsScreen
 import com.water.von.ui.screens.StationSettingsScreen
 import com.water.von.ui.screens.CameraSettingsScreen
-import com.water.von.ui.screens.Hx711ConfigScreen
+import com.water.von.ui.screens.DeviceHubScreen
 
 private const val TAB_MONITOR = 0
-private const val TAB_LOGS = 1
-private const val TAB_CONFIG = 2
-private const val TAB_NETWORK_LOGS = 3
-private const val TAB_STATION_SETTINGS = 4
-private const val TAB_CAMERA_SETTINGS = 5
+private const val TAB_DEVICE_HUB = 1
+private const val TAB_LOGS = 2
+private const val TAB_CONFIG = 3
+private const val TAB_NETWORK_LOGS = 4
+private const val TAB_STATION_SETTINGS = 5
+private const val TAB_CAMERA_SETTINGS = 6
 
 /**
  * 主容器页面 MainScreen
- * 整合底部导航栏，控制核心功能页之视图切换
+ * 整合底部/侧边导航栏，控制核心功能页之视图切换
+ * 包含：监控主屏、硬件设备工作台、运行日志三大主干页面
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -42,7 +44,6 @@ fun MainScreen(modifier: Modifier = Modifier) {
     var showMenu by remember { mutableStateOf(false) }
     var showAboutDialog by remember { mutableStateOf(false) }
     var showSensorDebugWindow by remember { mutableStateOf(MainActivity.showSensorDebugOnLaunch) }
-    var showHx711ConfigDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(MainActivity.showSensorDebugOnLaunch) {
         if (MainActivity.showSensorDebugOnLaunch) {
@@ -55,15 +56,15 @@ fun MainScreen(modifier: Modifier = Modifier) {
     if (showAboutDialog) {
         AlertDialog(
             onDismissRequest = { showAboutDialog = false },
-            title = { Text("关于", fontWeight = FontWeight.Bold) },
+            title = { Text("关于本系统", fontWeight = FontWeight.Bold) },
             text = {
                 Column {
+                    Text("水文水样监测采集系统 V2.0")
+                    Spacer(modifier = Modifier.height(8.dp))
                     Text("用户单位：工厂之家")
-                    Text("开发日期：2026年2月")
+                    Text("开发日期：2026年")
                     Text("技术支持：冯工")
                     Text("电话：13306400990")
-                    Spacer(modifier = Modifier.height(16.dp))
-                    Text("版本号：1.0")
                 }
             },
             confirmButton = {
@@ -79,14 +80,6 @@ fun MainScreen(modifier: Modifier = Modifier) {
             onDismissRequest = { 
                 showSensorDebugWindow = false 
                 MainActivity.showSensorDebugOnLaunch = false
-            }
-        )
-    }
-
-    if (showHx711ConfigDialog) {
-        Hx711ConfigScreen(
-            onDismissRequest = {
-                showHx711ConfigDialog = false
             }
         )
     }
@@ -114,49 +107,51 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         onDismissRequest = { showMenu = false }
                     ) {
                         DropdownMenuItem(
-                            text = { Text("云端配置") },
+                            text = { Text("🛠️ 硬件设备工作台") },
                             onClick = {
                                 showMenu = false
-                                selectedTab = TAB_CONFIG
+                                selectedTab = TAB_DEVICE_HUB
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("本地配置") },
-                            onClick = {
-                                showMenu = false
-                                selectedTab = TAB_STATION_SETTINGS
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("网络诊断日志") },
-                            onClick = {
-                                showMenu = false
-                                selectedTab = TAB_NETWORK_LOGS
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("摄像头配置") },
-                            onClick = {
-                                showMenu = false
-                                selectedTab = TAB_CAMERA_SETTINGS
-                            }
-                        )
-                        DropdownMenuItem(
-                            text = { Text("传感器调试") },
+                            text = { Text("📈 传感器 AD 波形调试") },
                             onClick = {
                                 showMenu = false
                                 showSensorDebugWindow = true
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("HX711 标定配置") },
+                            text = { Text("📷 摄像头突变配置") },
                             onClick = {
                                 showMenu = false
-                                showHx711ConfigDialog = true
+                                selectedTab = TAB_CAMERA_SETTINGS
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("⚙️ 站点本地配置") },
+                            onClick = {
+                                showMenu = false
+                                selectedTab = TAB_STATION_SETTINGS
                             }
                         )
                         DropdownMenuItem(
-                            text = { Text("关于") },
+                            text = { Text("☁️ 云端网络配置") },
+                            onClick = {
+                                showMenu = false
+                                selectedTab = TAB_CONFIG
+                            }
+                        )
+                        DropdownMenuItem(
+                            text = { Text("🌐 网络诊断日志") },
+                            onClick = {
+                                showMenu = false
+                                selectedTab = TAB_NETWORK_LOGS
+                            }
+                        )
+                        HorizontalDivider()
+                        DropdownMenuItem(
+                            text = { Text("ℹ️ 关于本系统") },
                             onClick = {
                                 showMenu = false
                                 showAboutDialog = true
@@ -174,6 +169,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
                         onClick = { selectedTab = TAB_MONITOR },
                         icon = { Text("📊", style = MaterialTheme.typography.titleLarge) },
                         label = { Text("监控", fontWeight = FontWeight.Bold) }
+                    )
+                    NavigationBarItem(
+                        selected = selectedTab == TAB_DEVICE_HUB,
+                        onClick = { selectedTab = TAB_DEVICE_HUB },
+                        icon = { Text("🛠️", style = MaterialTheme.typography.titleLarge) },
+                        label = { Text("工作台", fontWeight = FontWeight.Bold) }
                     )
                     NavigationBarItem(
                         selected = selectedTab == TAB_LOGS,
@@ -194,10 +195,10 @@ fun MainScreen(modifier: Modifier = Modifier) {
                 )
         ) {
             if (isLandscape) {
-                // 自定义极窄侧边导航栏，完全避开 Material 3 NavigationRail 的 56dp 宽度限制，让图标不受挤压且保持正常比例
+                // 自定义极窄侧边导航栏，避开 56dp 宽度限制
                 Surface(
                     modifier = Modifier
-                        .width(44.dp)
+                        .width(48.dp)
                         .fillMaxHeight(),
                     color = MaterialTheme.colorScheme.surfaceVariant
                 ) {
@@ -212,12 +213,12 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { selectedTab = TAB_MONITOR }
-                                .padding(vertical = 10.dp),
+                                .padding(vertical = 8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = "📊",
-                                fontSize = 20.sp,
+                                fontSize = 18.sp,
                                 color = if (selectedTab == TAB_MONITOR) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                             Spacer(modifier = Modifier.height(2.dp))
@@ -229,19 +230,43 @@ fun MainScreen(modifier: Modifier = Modifier) {
                             )
                         }
 
-                        Spacer(modifier = Modifier.height(16.dp))
+                        Spacer(modifier = Modifier.height(10.dp))
 
-                        // Tab 2: 日志
+                        // Tab 2: 硬件工作台
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { selectedTab = TAB_DEVICE_HUB }
+                                .padding(vertical = 8.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally
+                        ) {
+                            Text(
+                                text = "🛠️",
+                                fontSize = 18.sp,
+                                color = if (selectedTab == TAB_DEVICE_HUB) MaterialTheme.colorScheme.primary else Color.Gray
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = "硬件",
+                                fontSize = 10.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = if (selectedTab == TAB_DEVICE_HUB) MaterialTheme.colorScheme.primary else Color.Gray
+                            )
+                        }
+
+                        Spacer(modifier = Modifier.height(10.dp))
+
+                        // Tab 3: 日志
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .clickable { selectedTab = TAB_LOGS }
-                                .padding(vertical = 10.dp),
+                                .padding(vertical = 8.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(
                                 text = "📂",
-                                fontSize = 20.sp,
+                                fontSize = 18.sp,
                                 color = if (selectedTab == TAB_LOGS) MaterialTheme.colorScheme.primary else Color.Gray
                             )
                             Spacer(modifier = Modifier.height(2.dp))
@@ -270,6 +295,11 @@ fun MainScreen(modifier: Modifier = Modifier) {
             ) {
                 when (selectedTab) {
                     TAB_MONITOR -> MonitorScreen()
+                    TAB_DEVICE_HUB -> DeviceHubScreen(
+                        onOpenSensorDebug = { showSensorDebugWindow = true },
+                        onOpenCameraSettings = { selectedTab = TAB_CAMERA_SETTINGS },
+                        onOpenStationSettings = { selectedTab = TAB_STATION_SETTINGS }
+                    )
                     TAB_LOGS -> LogsScreen()
                     TAB_CONFIG -> ConfigScreen()
                     TAB_NETWORK_LOGS -> NetworkLogsScreen()
